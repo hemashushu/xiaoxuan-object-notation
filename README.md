@@ -326,7 +326,7 @@ ASON supports "auto-trimmed strings" by automatically trimming the same number o
            - Enceladus
         3. Jupiter
            - Io
-             Io is one of the four Galilean moons of the planet Jupiter..
+             Io is one of the four Galilean moons of the planet Jupiter.
            - Europa
         """
 }
@@ -344,7 +344,7 @@ In the example above, not every line has the same number of leading whitespaces,
    - Enceladus
 3. Jupiter
    - Io
-     Io is one of the four Galilean moons of the planet Jupiter..
+     Io is one of the four Galilean moons of the planet Jupiter.
    - Europa
 ```
 
@@ -379,7 +379,7 @@ An _Object_ can contain multiple values, each with a name called a _key_. The ke
 {
     name: "ason",
     version: "1.0.1",
-    edition: "2021", // Note that there is a comma.
+    edition: "2021", // Note that ths comma is allowed.
 }
 ```
 
@@ -389,7 +389,7 @@ The comma at the end of each key-value pair is optional, so the text above could
 
 ```json5
 {
-    name: "ason"  // Note that there is no comma.
+    name: "ason"  // Note that commas can be omitted.
     version: "1.0.1"
     edition: "2021"
 }
@@ -447,7 +447,7 @@ Similar to objects, the elements in a List can also be written on separate lines
     "Alice",
     "Bob",
     "Carol",
-    "Dan",  // Note that there is a comma.
+    "Dan",  // Note that ths comma is allowed.
 ]
 ```
 
@@ -455,7 +455,7 @@ and
 
 ```json5
 [
-    "Alice"  // Note that there is no comma.
+    "Alice"  // Note that commas can be omitted.
     "Bob"
     "Carol"
     "Dan"
@@ -531,7 +531,7 @@ Similar to Objects and Lists, the elements of a Tuple can also be written on sep
 (
     "Alice",
     11,
-    true, // Note that there is a comma.
+    true, // Note that ths comma is allowed.
 )
 ```
 
@@ -539,7 +539,7 @@ and
 
 ```json5
 (
-    "Alice" // Note that there is no comma.
+    "Alice" // Note that commas can be omitted.
     11
     true
 )
