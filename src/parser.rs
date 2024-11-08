@@ -7,16 +7,18 @@
 use std::io::Read;
 
 use crate::{
-    ast::{AsonNode, KeyValuePair, Number, Variant},
+    ast::{AsonNode, KeyValuePair, KeyValuePairExtend, Number, Variant},
     charposition::CharsWithPositionIter,
     charstream::{CharStreamFromCharIter, CharStreamFromReader},
     error::Error,
-    lexer::TokenIter,
+    lexer::{TokenIter, LEXER_PEEK_CHAR_MAX_COUNT},
     location::Location,
     normalizer::{ClearTokenIter, NormalizedTokenIter, TrimmedTokenIter},
     peekableiter::PeekableIter,
     token::{NumberToken, Token, TokenWithRange},
 };
+
+pub const PARSER_PEEK_TOKEN_MAX_COUNT: usize = 3;
 
 pub fn parse_from_str(s: &str) -> Result<AsonNode, Error> {
     let mut chars = s.chars();
@@ -33,14 +35,16 @@ pub fn parse_from_char_stream(
     char_stream: &mut dyn Iterator<Item = Result<char, Error>>,
 ) -> Result<AsonNode, Error> {
     let mut position_iter = CharsWithPositionIter::new(0, char_stream);
-    let mut peekable_position_iter = PeekableIter::new(&mut position_iter, 3);
+    let mut peekable_position_iter =
+        PeekableIter::new(&mut position_iter, LEXER_PEEK_CHAR_MAX_COUNT);
     let mut token_iter = TokenIter::new(&mut peekable_position_iter);
     let mut clear_iter = ClearTokenIter::new(&mut token_iter);
     let mut peekable_clear_iter = PeekableIter::new(&mut clear_iter, 1);
     let mut normalized_iter = NormalizedTokenIter::new(&mut peekable_clear_iter);
     let mut peekable_normalized_iter = PeekableIter::new(&mut normalized_iter, 1);
     let mut trimmed_iter = TrimmedTokenIter::new(&mut peekable_normalized_iter);
-    let mut peekable_trimmed_iter = PeekableIter::new(&mut trimmed_iter, 2);
+    let mut peekable_trimmed_iter =
+        PeekableIter::new(&mut trimmed_iter, PARSER_PEEK_TOKEN_MAX_COUNT);
 
     let mut parser = Parser::new(&mut peekable_trimmed_iter);
     let root = parser.parse_node()?;
@@ -169,7 +173,7 @@ impl<'a> Parser<'a> {
                         v
                     }
                     Token::String(s) => {
-                        let v = AsonNode::String_(s.to_owned());
+                        let v = AsonNode::String(s.to_owned());
                         self.next_token()?;
                         v
                     }
@@ -201,9 +205,25 @@ impl<'a> Parser<'a> {
                         self.next_token()?;
                         v
                     }
-                    Token::LeftBrace => {
+                    Token::LeftBrace
+                        if (matches!(self.peek_token(1), Ok(Some(Token::Identifier(_))))
+                            || (matches!(self.peek_token(1), Ok(Some(Token::NewLine)))
+                                && matches!(
+                                    self.peek_token(2),
+                                    Ok(Some(Token::Identifier(_)))
+                                ))) =>
+                    {
                         // object: {...}
                         self.parse_object()?
+                    }
+                    Token::LeftBrace => {
+                        // if (
+                        // matches!(self.peek_token(1), Ok(Some(Token::String(_) | Token::Number(_) ))) ||
+                        // (matches!(self.peek_token(1), Ok(Some(Token::NewLine))) &&
+                        // matches!(self.peek_token(2), Ok(Some(Token::String(_) | Token::Number(_)))))
+                        // )
+                        // map: {...}
+                        self.parse_map()?
                     }
                     Token::LeftBracket => {
                         // array: [...]
@@ -395,6 +415,77 @@ impl<'a> Parser<'a> {
         Ok(AsonNode::Object(kvps))
     }
 
+    fn parse_map(&mut self) -> Result<AsonNode, Error> {
+        // {...}?  //
+        // ^    ^__// to here
+        // |-------// current token, validated
+
+        self.next_token()?; // consume '{'
+
+        let mut kvps: Vec<KeyValuePairExtend> = vec![];
+
+        // to indicate it is parsing the first element of List, Tuple or Object
+        let mut is_first_element = true;
+
+        loop {
+            let exists_separator = if is_first_element {
+                self.consume_new_line_if_exist()?
+            } else {
+                self.consume_new_line_or_comma_if_exist()?
+            };
+
+            if matches!(self.peek_token(0)?, Some(Token::RightBrace)) {
+                break;
+            }
+
+            if !is_first_element && !matches!(exists_separator, Some(true)) {
+                if let Some(false) = exists_separator {
+                    return Err(Error::MessageWithLocation(
+                        "Expect a comma or new-line.".to_owned(),
+                        self.peek_range(0)?.unwrap().get_position_by_range_start(),
+                    ));
+                } else {
+                    return Err(Error::UnexpectedEndOfDocument(
+                        "Incomplete Object.".to_owned(),
+                    ));
+                }
+            }
+
+            is_first_element = false;
+
+            // let name = match self.next_token()? {
+            //     Some(Token::Identifier(n)) => n,
+            //     Some(_) => {
+            //         return Err(Error::MessageWithLocation(
+            //             "Expect a key name for object.".to_owned(),
+            //             self.last_range.get_position_by_range_start(),
+            //         ));
+            //     }
+            //     None => {
+            //         return Err(Error::UnexpectedEndOfDocument(
+            //             "Expect a key name for object.".to_owned(),
+            //         ));
+            //     }
+            // };
+
+            let name = self.parse_node()?;
+            self.consume_new_line_if_exist()?;
+            self.expect_colon()?;
+            self.consume_new_line_if_exist()?;
+            let value = self.parse_node()?;
+
+            let name_value_pair = KeyValuePairExtend {
+                key: Box::new(name),
+                value: Box::new(value),
+            };
+            kvps.push(name_value_pair);
+        }
+
+        self.next_token()?; // consume '}'
+
+        Ok(AsonNode::Map(kvps))
+    }
+
     fn parse_list(&mut self) -> Result<AsonNode, Error> {
         // [...]?  //
         // ^    ^__// to here
@@ -520,13 +611,17 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use crate::{
-        ast::{KeyValuePair, Number, Variant},
+        ast::{KeyValuePair, KeyValuePairExtend, Number, Variant},
         error::Error,
         location::Location,
         parser::parse_from_str,
     };
 
     use super::AsonNode;
+
+    fn new_string_node(s: &str) -> AsonNode {
+        AsonNode::String(s.to_owned())
+    }
 
     #[test]
     fn test_parse_simple_value() {
@@ -567,7 +662,7 @@ mod tests {
             "#
             )
             .unwrap(),
-            AsonNode::String_("hello".to_owned())
+            AsonNode::String("hello".to_owned())
         );
 
         assert_eq!(
@@ -603,7 +698,7 @@ mod tests {
             },
             KeyValuePair {
                 key: "name".to_owned(),
-                value: Box::new(AsonNode::String_("foo".to_owned())),
+                value: Box::new(AsonNode::String("foo".to_owned())),
             },
         ]);
 
@@ -682,7 +777,7 @@ mod tests {
                         AsonNode::Object(vec![
                             KeyValuePair {
                                 key: "city".to_owned(),
-                                value: Box::new(AsonNode::String_("ShenZhen".to_owned())),
+                                value: Box::new(AsonNode::String("ShenZhen".to_owned())),
                             },
                             KeyValuePair {
                                 key: "street".to_owned(),
@@ -694,35 +789,35 @@ mod tests {
             ])
         );
 
-        // err: invalid key name (should be enclosed with quotes)
-        assert!(matches!(
-            parse_from_str(r#"{"id": 123}"#),
-            Err(Error::MessageWithLocation(
-                _,
-                Location {
-                    unit: 0,
-                    index: 1,
-                    line: 0,
-                    column: 1,
-                    length: 0
-                }
-            ))
-        ));
+        // // err: invalid key name (should be enclosed with quotes)
+        // assert!(matches!(
+        //     parse_from_str(r#"{"id": 123}"#),
+        //     Err(Error::MessageWithLocation(
+        //         _,
+        //         Location {
+        //             unit: 0,
+        //             index: 1,
+        //             line: 0,
+        //             column: 1,
+        //             length: 0
+        //         }
+        //     ))
+        // ));
 
-        // err: invalid key name
-        assert!(matches!(
-            parse_from_str(r#"{123}"#),
-            Err(Error::MessageWithLocation(
-                _,
-                Location {
-                    unit: 0,
-                    index: 1,
-                    line: 0,
-                    column: 1,
-                    length: 0
-                }
-            ))
-        ));
+        // // err: invalid key name
+        // assert!(matches!(
+        //     parse_from_str(r#"{123}"#),
+        //     Err(Error::MessageWithLocation(
+        //         _,
+        //         Location {
+        //             unit: 0,
+        //             index: 1,
+        //             line: 0,
+        //             column: 1,
+        //             length: 0
+        //         }
+        //     ))
+        // ));
 
         // err: missing ':'
         assert!(matches!(
@@ -786,6 +881,30 @@ mod tests {
             parse_from_str(r#"{id:123"#),
             Err(Error::UnexpectedEndOfDocument(_))
         ));
+    }
+
+    #[test]
+    fn test_parse_map() {
+        let expect_object1 = AsonNode::Map(vec![
+            KeyValuePairExtend {
+                key: Box::new(AsonNode::Number(Number::I32(123))),
+                value: Box::new(AsonNode::String("foo".to_owned())),
+            },
+            KeyValuePairExtend {
+                key: Box::new(AsonNode::Number(Number::I32(456))),
+                value: Box::new(AsonNode::String("hello".to_owned())),
+            },
+        ]);
+
+        assert_eq!(
+            parse_from_str(
+                r#"
+            {123: "foo", 456: "hello"}
+            "#
+            )
+            .unwrap(),
+            expect_object1
+        );
     }
 
     #[test]
@@ -886,7 +1005,7 @@ mod tests {
     fn test_parse_tuple() {
         let expect_tuple1 = AsonNode::Tuple(vec![
             AsonNode::Number(Number::I32(123)),
-            AsonNode::String_("foo".to_owned()),
+            AsonNode::String("foo".to_owned()),
             AsonNode::Boolean(true),
         ]);
 
@@ -1174,19 +1293,19 @@ mod tests {
                 },
                 KeyValuePair {
                     key: "name".to_owned(),
-                    value: Box::new(AsonNode::String_("hello".to_owned())),
+                    value: Box::new(AsonNode::String("hello".to_owned())),
                 },
                 KeyValuePair {
                     key: "orders".to_owned(),
                     value: Box::new(AsonNode::List(vec![
                         AsonNode::Tuple(vec![
                             AsonNode::Number(Number::I32(1)),
-                            AsonNode::String_("foo".to_owned()),
+                            AsonNode::String("foo".to_owned()),
                             AsonNode::Boolean(true),
                         ]),
                         AsonNode::Tuple(vec![
                             AsonNode::Number(Number::I32(2)),
-                            AsonNode::String_("bar".to_owned()),
+                            AsonNode::String("bar".to_owned()),
                             AsonNode::Boolean(false),
                         ]),
                     ])),
@@ -1208,7 +1327,7 @@ mod tests {
                                     },
                                     KeyValuePair {
                                         key: "title".to_owned(),
-                                        value: Box::new(AsonNode::String_("read".to_owned())),
+                                        value: Box::new(AsonNode::String("read".to_owned())),
                                     },
                                 ]),
                                 AsonNode::Object(vec![
@@ -1218,7 +1337,7 @@ mod tests {
                                     },
                                     KeyValuePair {
                                         key: "title".to_owned(),
-                                        value: Box::new(AsonNode::String_("write".to_owned())),
+                                        value: Box::new(AsonNode::String("write".to_owned())),
                                     },
                                 ]),
                             ])),
@@ -1258,7 +1377,7 @@ mod tests {
             node,
             AsonNode::Object(vec![
                 KeyValuePair::new("id", AsonNode::Number(Number::I32(123))),
-                KeyValuePair::new("name", AsonNode::new_string("foo")),
+                KeyValuePair::new("name", new_string_node("foo")),
                 KeyValuePair::new(
                     "orders",
                     AsonNode::List(vec![

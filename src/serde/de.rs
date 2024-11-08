@@ -195,7 +195,10 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: de::Visitor<'de>,
     {
-        unimplemented!()
+        Err(Error::MessageWithLocation(
+            "Unexpected value.".to_owned(),
+            self.last_range.get_position_by_range_start(),
+        ))
     }
 
     fn deserialize_bool<V>(self, visitor: V) -> Result<V::Value>
@@ -588,7 +591,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         ))
     }
 
-    fn deserialize_map<V>(self, _visitor: V) -> Result<V::Value>
+    fn deserialize_map<V>(self, visitor: V) -> Result<V::Value>
     where
         V: de::Visitor<'de>,
     {
@@ -597,7 +600,24 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         // When serializing, the length may or may not be known before
         // iterating through all the entries. When deserializing,
         // the length is determined by looking at the serialized data.
-        Err(Error::Message("Does not support Map.".to_owned()))
+
+        match self.next_token()? {
+            Some(Token::LeftBrace) => {
+                let value = visitor.visit_map(ObjectAccessor::new(self))?;
+                self.expect_right_brace()?; // consume '}'
+
+                Ok(value)
+            }
+            Some(_) => Err(Error::MessageWithLocation(
+                "Expect a \"Map\".".to_owned(),
+                self.last_range.get_position_by_range_start(),
+            )),
+            None => Err(Error::UnexpectedEndOfDocument(
+                "Expect a \"Map\".".to_owned(),
+            )),
+        }
+
+        // Err(Error::Message("Does not support Map.".to_owned()))
     }
 
     fn deserialize_struct<V>(
@@ -951,6 +971,8 @@ impl<'de, 'a> MapAccess<'de> for ObjectAccessor<'a, 'de> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use crate::{error::Error, location::Location, serde::de::from_str};
 
     use pretty_assertions::assert_eq;
@@ -1432,6 +1454,35 @@ mod tests {
             from_str::<Object>(r#"{id: 123"#),
             Err(Error::UnexpectedEndOfDocument(_))
         ));
+    }
+
+    #[test]
+    fn test_map() {
+        let s0 = r#"
+        {
+            "foo": Option::Some("hello")
+            "bar": Option::None
+            "baz": Option::Some("world")
+        }
+        "#;
+
+        let m0: HashMap<String, Option<String>> = from_str(s0).unwrap();
+        assert_eq!(m0.get("foo").unwrap(), &Option::Some("hello".to_owned()));
+        assert_eq!(m0.get("bar").unwrap(), &Option::None);
+        assert_eq!(m0.get("baz").unwrap(), &Option::Some("world".to_owned()));
+
+        let s1 = r#"
+        {
+            223: Option::Some("hello")
+            227: Option::None
+            229: Option::Some("world")
+        }
+        "#;
+
+        let m1: HashMap<i32, Option<String>> = from_str(s1).unwrap();
+        assert_eq!(m1.get(&223).unwrap(), &Option::Some("hello".to_owned()));
+        assert_eq!(m1.get(&227).unwrap(), &Option::None);
+        assert_eq!(m1.get(&229).unwrap(), &Option::Some("world".to_owned()));
     }
 
     #[test]

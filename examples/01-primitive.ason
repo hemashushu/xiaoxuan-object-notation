@@ -87,7 +87,7 @@
     string_with_escaped_unicode: "\u{6CB3}\u{9A6C}"
     raw_string: r"hello"
     raw_string_with_hash: r#"hello "programming" world"#
-    indented_string: """
+    auto_trimmed_string: """
         heading 1
           heading 2
             heading 3

@@ -9,7 +9,7 @@ use std::io::Write;
 use chrono::{DateTime, FixedOffset};
 
 use crate::{
-    ast::{AsonNode, KeyValuePair, Number, Variant, VariantValue},
+    ast::{AsonNode, KeyValuePair, KeyValuePairExtend, Number, Variant, VariantValue},
     error::Error,
 };
 
@@ -212,18 +212,39 @@ fn print_object(
     write!(writer, "{}}}", leading_space)
 }
 
+fn print_map(
+    writer: &mut dyn Write,
+    v: &[KeyValuePairExtend],
+    level: usize,
+) -> Result<(), std::io::Error> {
+    let leading_space = INDENT_SPACES.repeat(level);
+    let sub_level = level + 1;
+    let element_leading_space = INDENT_SPACES.repeat(sub_level);
+
+    writeln!(writer, "{{")?;
+    for e in v {
+        write!(writer, "{}", element_leading_space)?;
+        print_node(writer, &e.key, sub_level)?;
+        write!(writer, ": ")?;
+        print_node(writer, &e.value, sub_level)?;
+        writeln!(writer)?;
+    }
+    write!(writer, "{}}}", leading_space)
+}
+
 fn print_node(writer: &mut dyn Write, node: &AsonNode, level: usize) -> Result<(), std::io::Error> {
     match node {
         AsonNode::Number(v) => print_number(writer, v),
         AsonNode::Boolean(v) => print_boolean(writer, v),
         AsonNode::Char(v) => print_char(writer, v),
-        AsonNode::String_(v) => print_string(writer, v),
+        AsonNode::String(v) => print_string(writer, v),
         AsonNode::DateTime(v) => print_date(writer, v),
         AsonNode::Variant(v) => print_variant(writer, v, level),
         AsonNode::ByteData(v) => print_byte_data(writer, v),
         AsonNode::List(v) => print_list(writer, v, level),
         AsonNode::Tuple(v) => print_tuple(writer, v, level),
         AsonNode::Object(v) => print_object(writer, v, level),
+        AsonNode::Map(v) => print_map(writer, v, level),
     }
 }
 
@@ -251,6 +272,10 @@ mod tests {
 
     use super::print_to_string;
 
+    fn new_string_node(s: &str) -> AsonNode {
+        AsonNode::String(s.to_owned())
+    }
+
     fn format(s: &str) -> String {
         let node = parse_from_str(s).unwrap();
         print_to_string(&node)
@@ -274,32 +299,32 @@ mod tests {
     }
 
     #[test]
-    fn test_write() {
+    fn test_print_node() {
         let node = AsonNode::Object(vec![
-            KeyValuePair::new("name", AsonNode::new_string("foo")),
+            KeyValuePair::new("name", new_string_node("foo")),
             KeyValuePair::new(
                 "type",
                 AsonNode::Variant(Variant::new("Type", "Application")),
             ),
-            KeyValuePair::new("version", AsonNode::new_string("0.1.0")),
+            KeyValuePair::new("version", new_string_node("0.1.0")),
             KeyValuePair::new(
                 "dependencies",
                 AsonNode::List(vec![
                     AsonNode::Object(vec![
-                        KeyValuePair::new("name", AsonNode::new_string("random")),
+                        KeyValuePair::new("name", new_string_node("random")),
                         KeyValuePair::new(
                             "version",
                             AsonNode::Variant(Variant::new("Option", "None")),
                         ),
                     ]),
                     AsonNode::Object(vec![
-                        KeyValuePair::new("name", AsonNode::new_string("regex")),
+                        KeyValuePair::new("name", new_string_node("regex")),
                         KeyValuePair::new(
                             "version",
                             AsonNode::Variant(Variant::with_value(
                                 "Option",
                                 "Some",
-                                AsonNode::new_string("1.0.1"),
+                                new_string_node("1.0.1"),
                             )),
                         ),
                     ]),
@@ -330,7 +355,7 @@ mod tests {
     }
 
     #[test]
-    fn test_format_simple_value() {
+    fn test_print_simple_value() {
         assert_eq!(
             format(
                 r#"
@@ -414,7 +439,7 @@ mod tests {
     }
 
     #[test]
-    fn test_format_byte_data() {
+    fn test_print_byte_data() {
         assert_eq!(
             format(
                 r#"
@@ -426,7 +451,7 @@ mod tests {
     }
 
     #[test]
-    fn test_format_object() {
+    fn test_print_object() {
         assert_eq!(
             format(
                 r#"
@@ -472,7 +497,23 @@ mod tests {
     }
 
     #[test]
-    fn test_format_list() {
+    fn test_print_map() {
+        assert_eq!(
+            format(
+                r#"
+            {123: "foo", 456: "hello"}
+            "#
+            ),
+            r#"{
+    123: "foo"
+    456: "hello"
+}"#
+
+        );
+    }
+
+    #[test]
+    fn test_print_list() {
         assert_eq!(
             format(
                 r#"
@@ -510,7 +551,7 @@ mod tests {
     }
 
     #[test]
-    fn test_format_tuple() {
+    fn test_print_tuple() {
         assert_eq!(
             format(
                 r#"
@@ -522,7 +563,7 @@ mod tests {
     }
 
     #[test]
-    fn test_format_variant() {
+    fn test_print_variant() {
         assert_eq!(format(r#"Option::None"#), "Option::None");
         assert_eq!(format(r#"Option::Some(123)"#), "Option::Some(123)");
         assert_eq!(
@@ -616,7 +657,7 @@ mod tests {
     string_with_escaped_unicode: "河马"
     raw_string: "hello"
     raw_string_with_hash: "hello \"programming\" world"
-    indented_string: "heading 1
+    auto_trimmed_string: "heading 1
   heading 2
     heading 3"
     new_line: "value1"
@@ -733,7 +774,41 @@ mod tests {
 
     #[test]
     fn test_example_file_05() {
-        let s = read_example_file_to_string("05-variant.ason");
+        let s = read_example_file_to_string("05-map.ason");
+        let n = parse_from_str(&s).unwrap();
+        let t = print_to_string(&n);
+
+        assert_eq!(
+            t,
+            r#"{
+    modules: {
+        "foo": {
+            version: "1.0"
+            repo: "default"
+        }
+        "bar": {
+            version: "2.0"
+        }
+    }
+    orders: {
+        123: [
+            1
+            2
+            3
+        ]
+        456: [
+            4
+            5
+            6
+        ]
+    }
+}"#
+        );
+    }
+
+    #[test]
+    fn test_example_file_06() {
+        let s = read_example_file_to_string("06-variant.ason");
         let n = parse_from_str(&s).unwrap();
         let t = print_to_string(&n);
 

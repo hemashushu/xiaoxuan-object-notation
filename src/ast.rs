@@ -31,6 +31,12 @@ pub struct KeyValuePair {
 }
 
 #[derive(Debug, PartialEq)]
+pub struct KeyValuePairExtend {
+    pub key: Box<AsonNode>,
+    pub value: Box<AsonNode>,
+}
+
+#[derive(Debug, PartialEq)]
 pub struct Variant {
     // variant type name, e.g. the "Option" of "Option::None"
     pub type_name: String,
@@ -54,13 +60,14 @@ pub enum AsonNode {
     Number(Number),
     Boolean(bool),
     Char(char),
-    String_(String),
+    String(String),
     DateTime(DateTime<FixedOffset>),
     Variant(Variant),
     ByteData(Vec<u8>),
     List(Vec<AsonNode>),
     Tuple(Vec<AsonNode>),
     Object(Vec<KeyValuePair>),
+    Map(Vec<KeyValuePairExtend>),
 }
 
 impl KeyValuePair {
@@ -107,11 +114,5 @@ impl Variant {
             member_name: member_name.to_owned(),
             value: VariantValue::Object(key_value_pairs),
         }
-    }
-}
-
-impl AsonNode {
-    pub fn new_string(s: &str) -> Self {
-        Self::String_(s.to_owned())
     }
 }

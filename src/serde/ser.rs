@@ -346,7 +346,11 @@ where
         // When serializing, the length may or may not be known before
         // iterating through all the entries. When deserializing,
         // the length is determined by looking at the serialized data.
-        Err(Error::Message("Does not support Map.".to_owned()))
+
+        self.append("{".to_owned())?;
+        self.is_first_element = true;
+        self.increase_level();
+        Ok(self)
     }
 
     fn serialize_struct(self, _name: &'static str, _len: usize) -> Result<Self::SerializeStruct> {
@@ -475,22 +479,30 @@ where
     type Ok = ();
     type Error = Error;
 
-    fn serialize_key<T>(&mut self, _key: &T) -> Result<()>
+    fn serialize_key<T>(&mut self, key: &T) -> Result<()>
     where
         T: ?Sized + Serialize,
     {
-        unreachable!()
+        self.is_first_element = false;
+
+        self.append("\n".to_owned())?;
+        self.append_indent()?;
+        key.serialize(&mut **self)
     }
 
-    fn serialize_value<T>(&mut self, _value: &T) -> Result<()>
+    fn serialize_value<T>(&mut self, value: &T) -> Result<()>
     where
         T: ?Sized + Serialize,
     {
-        unreachable!()
+        self.append(": ".to_owned())?;
+        value.serialize(&mut **self)
     }
 
     fn end(self) -> Result<()> {
-        unreachable!()
+        self.decrease_level();
+        self.append("\n".to_owned())?;
+        self.append_indent()?;
+        self.append("}".to_owned())
     }
 }
 
@@ -550,6 +562,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use pretty_assertions::assert_eq;
     use serde::Serialize;
     use serde_bytes::ByteBuf;
@@ -827,6 +841,33 @@ mod tests {
 }"#;
 
         assert_eq!(to_string(&v1).unwrap(), expected1);
+    }
+
+    #[test]
+    fn test_map() {
+        let mut m0 = HashMap::<String, Option<String>>::new();
+        m0.insert("foo".to_owned(), Some("hello".to_owned()));
+        m0.insert("bar".to_owned(), None);
+        m0.insert("baz".to_owned(), Some("world".to_owned()));
+
+        let s0 = to_string(&m0).unwrap();
+        assert!(s0.starts_with('{'));
+        assert!(s0.ends_with('}'));
+        assert!(s0.contains(r#""foo": Option::Some("hello")"#));
+        assert!(s0.contains(r#""bar": Option::None"#));
+        assert!(s0.contains(r#""baz": Option::Some("world")"#));
+
+        let mut m1 = HashMap::<i32, Option<String>>::new();
+        m1.insert(223, Some("hello".to_owned()));
+        m1.insert(227, None);
+        m1.insert(229, Some("world".to_owned()));
+
+        let s1 = to_string(&m1).unwrap();
+        assert!(s1.starts_with('{'));
+        assert!(s1.ends_with('}'));
+        assert!(s1.contains(r#"223: Option::Some("hello")"#));
+        assert!(s1.contains(r#"227: Option::None"#));
+        assert!(s1.contains(r#"229: Option::Some("world")"#));
     }
 
     #[test]

@@ -14,6 +14,8 @@ use crate::{
     token::{Comment, NumberToken, NumberType, Token, TokenWithRange},
 };
 
+pub const LEXER_PEEK_CHAR_MAX_COUNT: usize = 3;
+
 pub struct TokenIter<'a> {
     upstream: &'a mut PeekableIter<'a, Result<CharWithPosition, Error>>,
     last_position: Location,
@@ -249,7 +251,7 @@ impl<'a> TokenIter<'a> {
             '"' => {
                 if self.peek_char_and_equals(1, '"') && self.peek_char_and_equals(2, '"') {
                     // auto-trimmed string
-                    self.lex_indented_string()
+                    self.lex_auto_trimmed_string()
                 } else {
                     // normal string
                     self.lex_string()
@@ -1662,7 +1664,7 @@ impl<'a> TokenIter<'a> {
         Ok(TokenWithRange::new(Token::String(ss), ss_range))
     }
 
-    fn lex_indented_string(&mut self) -> Result<TokenWithRange, Error> {
+    fn lex_auto_trimmed_string(&mut self) -> Result<TokenWithRange, Error> {
         // """\n                    //
         // ^^^  auto-trimmed string //
         // |||  ...\n               //
@@ -2132,13 +2134,14 @@ mod tests {
         peekableiter::PeekableIter,
     };
 
-    use super::{Token, TokenIter};
+    use super::{Token, TokenIter, LEXER_PEEK_CHAR_MAX_COUNT};
 
     fn lex_str_to_vec_with_range(s: &str) -> Result<Vec<TokenWithRange>, Error> {
         let mut chars = s.chars();
         let mut char_stream = CharStreamFromCharIter::new(&mut chars);
         let mut position_iter = CharsWithPositionIter::new(0, &mut char_stream);
-        let mut peekable_position_iter = PeekableIter::new(&mut position_iter, 3);
+        let mut peekable_position_iter =
+            PeekableIter::new(&mut position_iter, LEXER_PEEK_CHAR_MAX_COUNT);
         let token_iter = TokenIter::new(&mut peekable_position_iter);
 
         // do not use `iter.collect::<Vec<_>>()` because the `TokenIter` throws
@@ -4147,7 +4150,7 @@ mod tests {
     }
 
     #[test]
-    fn test_lex_indented_string() {
+    fn test_lex_auto_trimmed_string() {
         assert_eq!(
             lex_str_to_vec(
                 r#"
