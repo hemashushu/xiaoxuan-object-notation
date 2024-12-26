@@ -7,7 +7,7 @@
 use std::io::Write;
 
 use super::Result;
-use crate::error::Error;
+use crate::AsonError;
 
 use serde::{ser, Serialize};
 
@@ -60,7 +60,7 @@ where
     fn append(&mut self, s: String) -> Result<()> {
         match write!(self.writer, "{}", s) {
             Ok(_) => Ok(()),
-            Err(e) => Err(Error::Message(e.to_string())),
+            Err(e) => Err(AsonError::Message(e.to_string())),
         }
     }
 
@@ -79,12 +79,12 @@ where
     }
 }
 
-impl<'a, 'b, W> ser::Serializer for &'a mut Serializer<'b, W>
+impl<W> ser::Serializer for &mut Serializer<'_, W>
 where
     W: Write,
 {
     type Ok = ();
-    type Error = Error;
+    type Error = AsonError;
 
     type SerializeSeq = Self;
     type SerializeTuple = Self;
@@ -248,13 +248,13 @@ where
     fn serialize_unit(self) -> Result<()> {
         // The type of `()` in Rust.
         // It represents an anonymous value containing no data.
-        Err(Error::Message("Does not support Unit.".to_owned()))
+        Err(AsonError::Message("Does not support Unit.".to_owned()))
     }
 
     fn serialize_unit_struct(self, _name: &'static str) -> Result<()> {
         // For example `struct Unit` or `PhantomData<T>`.
         // It represents a named value containing no data.
-        Err(Error::Message(
+        Err(AsonError::Message(
             "Does not support \"Unit\" style Struct.".to_owned(),
         ))
     }
@@ -274,7 +274,7 @@ where
         T: ?Sized + Serialize,
     {
         // For example `struct Millimeters(u8)`.
-        Err(Error::Message(
+        Err(AsonError::Message(
             "Does not support \"New-Type\" style Struct.".to_owned(),
         ))
     }
@@ -320,7 +320,7 @@ where
         _len: usize,
     ) -> Result<Self::SerializeTupleStruct> {
         // A named tuple, for example `struct Rgb(u8, u8, u8)`.
-        Err(Error::Message(
+        Err(AsonError::Message(
             "Does not support \"Tuple\" style Struct.".to_owned(),
         ))
     }
@@ -347,7 +347,7 @@ where
         // iterating through all the entries. When deserializing,
         // the length is determined by looking at the serialized data.
 
-        self.append("{".to_owned())?;
+        self.append("[".to_owned())?;
         self.is_first_element = true;
         self.increase_level();
         Ok(self)
@@ -377,12 +377,12 @@ where
     }
 }
 
-impl<'a, 'b, W> ser::SerializeSeq for &'a mut Serializer<'b, W>
+impl<W> ser::SerializeSeq for &mut Serializer<'_, W>
 where
     W: Write,
 {
     type Ok = ();
-    type Error = Error;
+    type Error = AsonError;
 
     fn serialize_element<T>(&mut self, value: &T) -> Result<()>
     where
@@ -403,12 +403,12 @@ where
     }
 }
 
-impl<'a, 'b, W> ser::SerializeTuple for &'a mut Serializer<'b, W>
+impl<W> ser::SerializeTuple for &mut Serializer<'_, W>
 where
     W: Write,
 {
     type Ok = ();
-    type Error = Error;
+    type Error = AsonError;
 
     fn serialize_element<T>(&mut self, value: &T) -> Result<()>
     where
@@ -428,12 +428,12 @@ where
     }
 }
 
-impl<'a, 'b, W> ser::SerializeTupleStruct for &'a mut Serializer<'b, W>
+impl<W> ser::SerializeTupleStruct for &mut Serializer<'_, W>
 where
     W: Write,
 {
     type Ok = ();
-    type Error = Error;
+    type Error = AsonError;
 
     fn serialize_field<T>(&mut self, _value: &T) -> Result<()>
     where
@@ -447,12 +447,12 @@ where
     }
 }
 
-impl<'a, 'b, W> ser::SerializeTupleVariant for &'a mut Serializer<'b, W>
+impl<W> ser::SerializeTupleVariant for &mut Serializer<'_, W>
 where
     W: Write,
 {
     type Ok = ();
-    type Error = Error;
+    type Error = AsonError;
 
     fn serialize_field<T>(&mut self, value: &T) -> Result<()>
     where
@@ -472,12 +472,12 @@ where
     }
 }
 
-impl<'a, 'b, W> ser::SerializeMap for &'a mut Serializer<'b, W>
+impl<W> ser::SerializeMap for &mut Serializer<'_, W>
 where
     W: Write,
 {
     type Ok = ();
-    type Error = Error;
+    type Error = AsonError;
 
     fn serialize_key<T>(&mut self, key: &T) -> Result<()>
     where
@@ -502,16 +502,16 @@ where
         self.decrease_level();
         self.append("\n".to_owned())?;
         self.append_indent()?;
-        self.append("}".to_owned())
+        self.append("]".to_owned())
     }
 }
 
-impl<'a, 'b, W> ser::SerializeStruct for &'a mut Serializer<'b, W>
+impl<W> ser::SerializeStruct for &mut Serializer<'_, W>
 where
     W: Write,
 {
     type Ok = ();
-    type Error = Error;
+    type Error = AsonError;
 
     fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<()>
     where
@@ -533,12 +533,12 @@ where
     }
 }
 
-impl<'a, 'b, W> ser::SerializeStructVariant for &'a mut Serializer<'b, W>
+impl<W> ser::SerializeStructVariant for &mut Serializer<'_, W>
 where
     W: Write,
 {
     type Ok = ();
-    type Error = Error;
+    type Error = AsonError;
 
     fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<()>
     where
@@ -683,7 +683,7 @@ mod tests {
     }
 
     #[test]
-    fn test_byte_data() {
+    fn test_hex_byte_data() {
         let v0 = vec![11u8, 13, 17, 19];
         let v0b = ByteBuf::from(v0);
         assert_eq!(to_string(&v0b).unwrap(), r#"h"0b 0d 11 13""#);
@@ -851,8 +851,8 @@ mod tests {
         m0.insert("baz".to_owned(), Some("world".to_owned()));
 
         let s0 = to_string(&m0).unwrap();
-        assert!(s0.starts_with('{'));
-        assert!(s0.ends_with('}'));
+        assert!(s0.starts_with('['));
+        assert!(s0.ends_with(']'));
         assert!(s0.contains(r#""foo": Option::Some("hello")"#));
         assert!(s0.contains(r#""bar": Option::None"#));
         assert!(s0.contains(r#""baz": Option::Some("world")"#));
@@ -863,8 +863,8 @@ mod tests {
         m1.insert(229, Some("world".to_owned()));
 
         let s1 = to_string(&m1).unwrap();
-        assert!(s1.starts_with('{'));
-        assert!(s1.ends_with('}'));
+        assert!(s1.starts_with('['));
+        assert!(s1.ends_with(']'));
         assert!(s1.contains(r#"223: Option::Some("hello")"#));
         assert!(s1.contains(r#"227: Option::None"#));
         assert!(s1.contains(r#"229: Option::Some("world")"#));

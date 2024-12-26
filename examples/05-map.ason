@@ -1,10 +1,10 @@
 {
-    modules: {
+    modules: [
         "foo": {version: "1.0", repo: "default"}
         "bar": {version: "2.0"}
-    }
-    orders: {
+    ]
+    orders: [
         123: [1,2,3]
         456: [4,5,6]
-    }
+    ]
 }

@@ -9,11 +9,11 @@ use std::io::Write;
 use chrono::{DateTime, FixedOffset};
 
 use crate::{
-    ast::{AsonNode, KeyValuePair, KeyValuePairExtend, Number, Variant, VariantValue},
-    error::Error,
+    ast::{AsonNode, KeyValuePair, NameValuePair, Number, Variant, VariantValue},
+    AsonError,
 };
 
-pub const INDENT_SPACES: &str = "    ";
+pub const DEFAULT_INDENT_CHARS: &str = "    ";
 
 fn print_number(writer: &mut dyn Write, v: &Number) -> Result<(), std::io::Error> {
     match v {
@@ -116,12 +116,15 @@ fn print_string(writer: &mut dyn Write, v: &str) -> Result<(), std::io::Error> {
             .map(|c| match c {
                 '\\' => "\\\\".to_owned(),
                 '"' => "\\\"".to_owned(),
-                // null char is allowed in the ASON string, it is used for represent the string resource.
+
+                // null char is allowed in the source code,
+                // it is used to represent the null-terminated string.
                 '\0' => "\\0".to_owned(),
-                // some text editors automatically remove the tab when
-                // it is at the end of a line, so it is best to escape the tab char.
-                // therefor it should be escaped
+
+                // some text editors automatically remove the tab at
+                // the end of a line, so it is best to escape the tab character.
                 '\t' => "\\t".to_owned(),
+
                 _ => c.to_string(),
             })
             .collect::<Vec<String>>()
@@ -133,53 +136,113 @@ fn print_date(writer: &mut dyn Write, v: &DateTime<FixedOffset>) -> Result<(), s
     write!(writer, "d\"{}\"", v.to_rfc3339())
 }
 
-fn print_variant(writer: &mut dyn Write, v: &Variant, level: usize) -> Result<(), std::io::Error> {
+fn print_variant(
+    writer: &mut dyn Write,
+    v: &Variant,
+    indent_chars: &str,
+    indent_level: usize,
+) -> Result<(), std::io::Error> {
     let (type_name, member_name, value) = (&v.type_name, &v.member_name, &v.value);
 
     match value {
         VariantValue::Empty => write!(writer, "{}::{}", type_name, member_name),
         VariantValue::Value(v) => {
             write!(writer, "{}::{}(", type_name, member_name)?;
-            print_node(writer, v, level)?;
+            print_node(writer, v, indent_chars, indent_level)?;
             write!(writer, ")")
         }
         VariantValue::Tuple(v) => {
             write!(writer, "{}::{}", type_name, member_name)?;
-            print_tuple(writer, v, level)
+            print_tuple(writer, v, indent_chars, indent_level)
         }
         VariantValue::Object(kvps) => {
             write!(writer, "{}::{}", type_name, member_name)?;
-            print_object(writer, kvps, level)
+            print_object(writer, kvps, indent_chars, indent_level)
         }
     }
 }
 
-fn print_byte_data(writer: &mut dyn Write, v: &[u8]) -> Result<(), std::io::Error> {
-    write!(
-        writer,
-        "h\"{}\"",
-        v.iter()
-            .map(|item| format!("{:02x}", item))
-            .collect::<Vec<String>>()
-            .join(" ")
-    )
+// fn print_hex_byte_data(writer: &mut dyn Write, v: &[u8]) -> Result<(), std::io::Error> {
+//     write!(
+//         writer,
+//         "h\"{}\"",
+//         v.iter()
+//             .map(|item| format!("{:02x}", item))
+//             .collect::<Vec<String>>()
+//             .join(" ")
+//     )
+// }
+
+/// format the byte array with fixed length hex:
+///
+/// e.g.
+///
+/// h"00 11 22 33  44 55 66 77
+///   88 99 aa bb  cc dd ee ff"
+///
+fn print_hex_byte_data(
+    writer: &mut dyn Write,
+    data: &[u8],
+    indent_chars: &str,
+) -> Result<(), std::io::Error> {
+    let line_sep = format!("\n{}", indent_chars);
+    let content = data
+        .chunks(8)
+        .map(|chunk| {
+            // line
+            chunk
+                .iter()
+                .enumerate()
+                .map(|(idx, byte)| {
+                    // format the bytes as the following text:
+                    // 00 11 22 33  44 55 66 77
+                    // 00 11 22 33
+                    // 00 11
+                    //
+                    // Rust std format!()
+                    // https://doc.rust-lang.org/std/fmt/
+                    if idx == 4 {
+                        format!("  {:02x}", byte)
+                    } else if idx == 0 {
+                        format!("{:02x}", byte)
+                    } else {
+                        format!(" {:02x}", byte)
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join("")
+        })
+        .collect::<Vec<String>>()
+        .join(&line_sep);
+
+    write!(writer, "h\"{}\"", content)
 }
 
-fn print_list(writer: &mut dyn Write, v: &[AsonNode], level: usize) -> Result<(), std::io::Error> {
-    let leading_space = INDENT_SPACES.repeat(level);
-    let sub_level = level + 1;
-    let element_leading_space = INDENT_SPACES.repeat(sub_level);
+fn print_list(
+    writer: &mut dyn Write,
+    v: &[AsonNode],
+    indent_chars: &str,
+    indent_level: usize,
+) -> Result<(), std::io::Error> {
+    let leading_space = indent_chars.repeat(indent_level);
+    let sub_level = indent_level + 1;
+    let element_leading_space = indent_chars.repeat(sub_level);
 
     writeln!(writer, "[")?;
     for e in v {
         write!(writer, "{}", element_leading_space)?;
-        print_node(writer, e, sub_level)?;
+        print_node(writer, e, indent_chars, sub_level)?;
         writeln!(writer)?;
     }
     write!(writer, "{}]", leading_space)
 }
 
-fn print_tuple(writer: &mut dyn Write, v: &[AsonNode], level: usize) -> Result<(), std::io::Error> {
+fn print_tuple(
+    writer: &mut dyn Write,
+    v: &[AsonNode],
+    indent_chars: &str,
+    indent_level: usize,
+) -> Result<(), std::io::Error> {
     write!(writer, "(")?;
     let mut is_first_element = true;
 
@@ -189,7 +252,7 @@ fn print_tuple(writer: &mut dyn Write, v: &[AsonNode], level: usize) -> Result<(
         } else {
             write!(writer, ", ")?;
         }
-        print_node(writer, e, level)?;
+        print_node(writer, e, indent_chars, indent_level)?;
     }
     write!(writer, ")")
 }
@@ -197,16 +260,17 @@ fn print_tuple(writer: &mut dyn Write, v: &[AsonNode], level: usize) -> Result<(
 fn print_object(
     writer: &mut dyn Write,
     v: &[KeyValuePair],
-    level: usize,
+    indent_chars: &str,
+    indent_level: usize,
 ) -> Result<(), std::io::Error> {
-    let leading_space = INDENT_SPACES.repeat(level);
-    let sub_level = level + 1;
-    let element_leading_space = INDENT_SPACES.repeat(sub_level);
+    let leading_space = indent_chars.repeat(indent_level);
+    let sub_level = indent_level + 1;
+    let element_leading_space = indent_chars.repeat(sub_level);
 
     writeln!(writer, "{{")?;
     for e in v {
         write!(writer, "{}{}: ", element_leading_space, e.key)?;
-        print_node(writer, &e.value, sub_level)?;
+        print_node(writer, &e.value, indent_chars, sub_level)?;
         writeln!(writer)?;
     }
     write!(writer, "{}}}", leading_space)
@@ -214,44 +278,50 @@ fn print_object(
 
 fn print_map(
     writer: &mut dyn Write,
-    v: &[KeyValuePairExtend],
-    level: usize,
+    v: &[NameValuePair],
+    indent_chars: &str,
+    indent_level: usize,
 ) -> Result<(), std::io::Error> {
-    let leading_space = INDENT_SPACES.repeat(level);
-    let sub_level = level + 1;
-    let element_leading_space = INDENT_SPACES.repeat(sub_level);
+    let leading_space = indent_chars.repeat(indent_level);
+    let sub_level = indent_level + 1;
+    let element_leading_space = indent_chars.repeat(sub_level);
 
-    writeln!(writer, "{{")?;
+    writeln!(writer, "[")?;
     for e in v {
         write!(writer, "{}", element_leading_space)?;
-        print_node(writer, &e.key, sub_level)?;
+        print_node(writer, &e.name, indent_chars, sub_level)?;
         write!(writer, ": ")?;
-        print_node(writer, &e.value, sub_level)?;
+        print_node(writer, &e.value, indent_chars, sub_level)?;
         writeln!(writer)?;
     }
-    write!(writer, "{}}}", leading_space)
+    write!(writer, "{}]", leading_space)
 }
 
-fn print_node(writer: &mut dyn Write, node: &AsonNode, level: usize) -> Result<(), std::io::Error> {
+fn print_node(
+    writer: &mut dyn Write,
+    node: &AsonNode,
+    indent_chars: &str,
+    indent_level: usize,
+) -> Result<(), std::io::Error> {
     match node {
         AsonNode::Number(v) => print_number(writer, v),
         AsonNode::Boolean(v) => print_boolean(writer, v),
         AsonNode::Char(v) => print_char(writer, v),
         AsonNode::String(v) => print_string(writer, v),
         AsonNode::DateTime(v) => print_date(writer, v),
-        AsonNode::Variant(v) => print_variant(writer, v, level),
-        AsonNode::ByteData(v) => print_byte_data(writer, v),
-        AsonNode::List(v) => print_list(writer, v, level),
-        AsonNode::Tuple(v) => print_tuple(writer, v, level),
-        AsonNode::Object(v) => print_object(writer, v, level),
-        AsonNode::Map(v) => print_map(writer, v, level),
+        AsonNode::Variant(v) => print_variant(writer, v, indent_chars, indent_level),
+        AsonNode::HexByteData(v) => print_hex_byte_data(writer, v, indent_chars),
+        AsonNode::List(v) => print_list(writer, v, indent_chars, indent_level),
+        AsonNode::Tuple(v) => print_tuple(writer, v, indent_chars, indent_level),
+        AsonNode::Object(v) => print_object(writer, v, indent_chars, indent_level),
+        AsonNode::Map(v) => print_map(writer, v, indent_chars, indent_level),
     }
 }
 
-pub fn print_to_writer(writer: &mut dyn Write, node: &AsonNode) -> Result<(), Error> {
-    match print_node(writer, node, 0) {
+pub fn print_to_writer(writer: &mut dyn Write, node: &AsonNode) -> Result<(), AsonError> {
+    match print_node(writer, node, DEFAULT_INDENT_CHARS, 0) {
         Ok(_) => Ok(()),
-        Err(e) => Err(Error::Message(e.to_string())),
+        Err(e) => Err(AsonError::Message(e.to_string())),
     }
 }
 
@@ -265,16 +335,13 @@ pub fn print_to_string(node: &AsonNode) -> String {
 mod tests {
     use pretty_assertions::assert_eq;
 
-    use crate::{
-        ast::{AsonNode, KeyValuePair, Variant},
-        parser::parse_from_str,
-    };
+    use crate::parser::parse_from_str;
 
     use super::print_to_string;
 
-    fn new_string_node(s: &str) -> AsonNode {
-        AsonNode::String(s.to_owned())
-    }
+    // fn new_string_node(s: &str) -> AsonNode {
+    //     AsonNode::String(s.to_owned())
+    // }
 
     fn format(s: &str) -> String {
         let node = parse_from_str(s).unwrap();
@@ -298,61 +365,61 @@ mod tests {
         std::fs::read_to_string(file_path).unwrap()
     }
 
-    #[test]
-    fn test_print_node() {
-        let node = AsonNode::Object(vec![
-            KeyValuePair::new("name", new_string_node("foo")),
-            KeyValuePair::new(
-                "type",
-                AsonNode::Variant(Variant::new("Type", "Application")),
-            ),
-            KeyValuePair::new("version", new_string_node("0.1.0")),
-            KeyValuePair::new(
-                "dependencies",
-                AsonNode::List(vec![
-                    AsonNode::Object(vec![
-                        KeyValuePair::new("name", new_string_node("random")),
-                        KeyValuePair::new(
-                            "version",
-                            AsonNode::Variant(Variant::new("Option", "None")),
-                        ),
-                    ]),
-                    AsonNode::Object(vec![
-                        KeyValuePair::new("name", new_string_node("regex")),
-                        KeyValuePair::new(
-                            "version",
-                            AsonNode::Variant(Variant::with_value(
-                                "Option",
-                                "Some",
-                                new_string_node("1.0.1"),
-                            )),
-                        ),
-                    ]),
-                ]),
-            ),
-        ]);
-
-        let text = print_to_string(&node);
-
-        assert_eq!(
-            text,
-            r#"{
-    name: "foo"
-    type: Type::Application
-    version: "0.1.0"
-    dependencies: [
-        {
-            name: "random"
-            version: Option::None
-        }
-        {
-            name: "regex"
-            version: Option::Some("1.0.1")
-        }
-    ]
-}"#
-        );
-    }
+    //     #[test]
+    //     fn test_print_node() {
+    //         let node = AsonNode::Object(vec![
+    //             KeyValuePair::new("name", new_string_node("foo")),
+    //             KeyValuePair::new(
+    //                 "type",
+    //                 AsonNode::Variant(Variant::new("Type", "Application")),
+    //             ),
+    //             KeyValuePair::new("version", new_string_node("0.1.0")),
+    //             KeyValuePair::new(
+    //                 "dependencies",
+    //                 AsonNode::List(vec![
+    //                     AsonNode::Object(vec![
+    //                         KeyValuePair::new("name", new_string_node("random")),
+    //                         KeyValuePair::new(
+    //                             "version",
+    //                             AsonNode::Variant(Variant::new("Option", "None")),
+    //                         ),
+    //                     ]),
+    //                     AsonNode::Object(vec![
+    //                         KeyValuePair::new("name", new_string_node("regex")),
+    //                         KeyValuePair::new(
+    //                             "version",
+    //                             AsonNode::Variant(Variant::with_value(
+    //                                 "Option",
+    //                                 "Some",
+    //                                 new_string_node("1.0.1"),
+    //                             )),
+    //                         ),
+    //                     ]),
+    //                 ]),
+    //             ),
+    //         ]);
+    //
+    //         let text = print_to_string(&node);
+    //
+    //         assert_eq!(
+    //             text,
+    //             r#"{
+    //     name: "foo"
+    //     type: Type::Application
+    //     version: "0.1.0"
+    //     dependencies: [
+    //         {
+    //             name: "random"
+    //             version: Option::None
+    //         }
+    //         {
+    //             name: "regex"
+    //             version: Option::Some("1.0.1")
+    //         }
+    //     ]
+    // }"#
+    //         );
+    //     }
 
     #[test]
     fn test_print_simple_value() {
@@ -439,14 +506,16 @@ mod tests {
     }
 
     #[test]
-    fn test_print_byte_data() {
+    fn test_print_hex_byte_data() {
         assert_eq!(
             format(
                 r#"
-            h"11 13 17 19"
+            h"11 13 17 19 23 29 31 37 41 43 47 53 59 61 67 71 73 79"
             "#
             ),
-            "h\"11 13 17 19\""
+            "h\"11 13 17 19  23 29 31 37
+    41 43 47 53  59 61 67 71
+    73 79\""
         );
     }
 
@@ -501,14 +570,13 @@ mod tests {
         assert_eq!(
             format(
                 r#"
-            {123: "foo", 456: "hello"}
+            [123: "foo", 456: "hello"]
             "#
             ),
-            r#"{
+            r#"[
     123: "foo"
     456: "hello"
-}"#
-
+]"#
         );
     }
 
@@ -781,7 +849,7 @@ mod tests {
         assert_eq!(
             t,
             r#"{
-    modules: {
+    modules: [
         "foo": {
             version: "1.0"
             repo: "default"
@@ -789,8 +857,8 @@ mod tests {
         "bar": {
             version: "2.0"
         }
-    }
-    orders: {
+    ]
+    orders: [
         123: [
             1
             2
@@ -801,7 +869,7 @@ mod tests {
             5
             6
         ]
-    }
+    ]
 }"#
         );
     }

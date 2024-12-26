@@ -4,7 +4,7 @@ _ASON_ is a data format evolved from JSON, featuring **strong data types** and s
 
 <!-- (_ASON_ stands for _XiaoXuan Script Object Notation_) -->
 
-**Table of Content**
+Table of Content
 
 <!-- @import "[TOC]" {cmd="toc" depthFrom=2 depthTo=6 orderedList=false} -->
 
@@ -25,8 +25,8 @@ _ASON_ is a data format evolved from JSON, featuring **strong data types** and s
     - [6.1.2 Multi-Line Strings](#612-multi-line-strings)
     - [6.1.3 Auto-Trimmed Strings](#613-auto-trimmed-strings)
   - [6.2 Objects](#62-objects)
-  - [6.3 Maps](#63-maps)
-  - [6.4 Lists](#64-lists)
+  - [6.3 Lists](#63-lists)
+  - [6.4 Maps](#64-maps)
   - [6.5 Tuples](#65-tuples)
   - [6.6 Variants](#66-variants)
   - [6.7 Comments](#67-comments)
@@ -49,7 +49,7 @@ _ASON_ is a data format evolved from JSON, featuring **strong data types** and s
 
 - **Simple and Consistent Syntax:** ASON's syntax closely resembles Rust, featuring support for comments, omitting double quotes for structure (object) field names, and allowing trailing commas in the last array element. These features enhance familiarity and writing fluency.
 
-- **Strong Data Typing:** ASON numbers can be explicitly typed (e.g., `u8`, `i32`, `f32`, `f64`), and integers can be represented in hexdecimal and binary formats. Additionally, new data types such as `DateTime`, `Tuple`, `ByteData`, `Char` are introduced, enabling more precise and rigorous data representation.
+- **Strong Data Typing:** ASON numbers can be explicitly typed (e.g., `u8`, `i32`, `f32`, `f64`), and integers can be represented in hexdecimal and binary formats. Additionally, new data types such as `DateTime`, `Tuple`, `HexByteData`, `Char` are introduced, enabling more precise and rigorous data representation.
 
 - **Native Variant Data Type Support, Eliminating the Null Value:** ASON natively supports variant data types (also known as _algebraic types_, similar to the _Enums_ in Rust). This enables seamless serialization of complex data structures from high-level programming languages. Importantly, it eliminates the error-prone `null` value.
 
@@ -68,14 +68,14 @@ An example of ASON text:
     datetime: d"2023-03-24 12:30:00+08:00"
     bytedata: h"68 65 6c 6c 6f"
     list: [1, 2, 3]
+    map: [
+        123: "Alice"
+        456: "Bob"
+    ]
     tuple: (1, "foo", true)
     object: {
         id: 123
         name: "Alice"
-    }
-    map: {
-        123: "Alice"
-        456: "Bob"
     }
     variant: Option::None
     variant_with_value: Option::Some(123)
@@ -101,7 +101,7 @@ ASON is a "strong datatype" of JSON, but ASON is simpler, more consistent, and m
 - Support for "long strings", "raw strings", and "auto-trimmed string" is added.
 - Support for "line comments", "block comments" is added.
 - The `Variant` data type is added, and the `null` value is removed.
-- New data types such as `Char`, `DateTime`, `Tuple`, `ByteData` are added.
+- New data types such as `Char`, `DateTime`, `Tuple`, `HexByteData` are added.
 - Strings are consistently represented using double quotes.
 - `List` requires all elements to be of the same data type.
 - A trailing comma is allowed at the end of the last element of `List`, `Tuple`, `Object` and `Map`.
@@ -238,7 +238,7 @@ let s = print_to_string(&node);
 
 ASON is composed of values and comments.
 
-There are two types of values: primitive and composite. Primitive values are basic data types like integers, strings, booleans and datetimes. Composite values are structures made up of multiple values (includes primitive and composite values), such as lists and objects.
+There are two types of values: primitive and compound. Primitive values are basic data types like integers, strings, booleans and datetimes. Compound values are structures made up of multiple values (includes primitive and compound values), such as lists and objects.
 
 ### 6.1 Primitive Values
 
@@ -401,7 +401,7 @@ Of course, multiple key-value pairs can also be written on a single line. In thi
 {name: "ason", version: "1.0.1", edition: "2021",}
 ```
 
-The values within an Object can be any type, including primitive values (such as numbers, strings, dates) and composite values (such as Lists, Objects, Tuples). In the real world, an Object usually contains other Objects, for example:
+The values within an Object can be any type, including primitive values (such as numbers, strings, dates) and compound values (such as Lists, Objects, Tuples). In the real world, an Object usually contains other Objects, for example:
 
 ```json5
 {
@@ -418,21 +418,7 @@ The values within an Object can be any type, including primitive values (such as
 }
 ```
 
-### 6.3 Maps
-
-A Map is almost exactly like an Object except that its keys are general data types like numbers or string instead of identifiers, for example:
-
-```json5
-{
-    "serde": "1.0"
-    "serde_bytes": "0.11"
-    "chrono": "0.4.38"
-}
-```
-
-You need to be careful not to put double quotes around the keys when writing an Object, or it will be parsed as a Map.
-
-### 6.4 Lists
+### 6.3 Lists
 
 A List is a collection of values of the same data type, for example:
 
@@ -514,6 +500,18 @@ If the elements in a List are Lists, then the data type of the elements in each 
 ```
 
 In the example above, although the length of each sub-list is different, since the type of a List is determined ONLY by the type of its elements, the types of these sub-lists are asserted to be the same, and therefore it is a valid List.
+
+### 6.4 Maps
+
+A Map is a list composed of one or more name-value pairs. In appearance, a Map is similar to an Object, but the names of items in a Map are typically strings or numbers (primitive data types), rather than identifiers. Additionally, a Map is a special kind of list, so it is enclosed in square brackets (`[...]`) instead of curly braces (`{...}`).
+
+```json5
+[
+    "serde": "1.0"
+    "serde_bytes": "0.11"
+    "chrono": "0.4.38"
+]
+```
 
 ### 6.5 Tuples
 
@@ -663,7 +661,7 @@ The nesting feature of block comments makes it more convenient for us to comment
 
 ### 6.8 Documents
 
-An ASON document can only contain one value (includes primitive value and composite value), like JSON, a typical ASON document is usually an Object or a List. In fact, all types of values are allowed, not limited to Objects or Lists. For example, a Tuple, a Variant, even a number or a string is allowed. Just make sure that a document has exactly one value. For example, the following are both valid ASON documents:
+An ASON document can only contain one value (one primitive value or one compound value), like JSON, a typical ASON document is usually an Object or a List. In fact, all types of values are allowed, not limited to Objects or Lists. For example, a Tuple, a Variant, even a number or a string is allowed. Just make sure that a document has exactly one value. For example, the following are both valid ASON documents:
 
 ```json5
 // Valid ASON document.

@@ -6,7 +6,7 @@
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Location {
-    pub unit: usize,   // the index of source file
+    // pub unit: usize,   // the index of source file
     pub index: usize,  // character index
     pub line: usize,   // line index
     pub column: usize, // column index
@@ -14,9 +14,9 @@ pub struct Location {
 }
 
 impl Location {
-    pub fn new_position(unit: usize, index: usize, line: usize, column: usize) -> Self {
+    pub fn new_position(/* unit: usize,*/ index: usize, line: usize, column: usize) -> Self {
         Self {
-            unit,
+            // unit,
             index,
             line,
             column,
@@ -24,9 +24,9 @@ impl Location {
         }
     }
 
-    pub fn new_range(unit: usize, index: usize, line: usize, column: usize, length: usize) -> Self {
+    pub fn new_range(/* unit: usize, */ index: usize, line: usize, column: usize, length: usize) -> Self {
         Self {
-            unit,
+            // unit,
             index,
             line,
             column,
@@ -37,7 +37,7 @@ impl Location {
     /// Build Range with Position and length
     pub fn from_position_and_length(position: &Location, length: usize) -> Self {
         Self::new_range(
-            position.unit,
+            // position.unit,
             position.index,
             position.line,
             position.column,
@@ -48,7 +48,7 @@ impl Location {
     /// Convert two Positions to Range
     pub fn from_position_pair(position_start: &Location, position_end: &Location) -> Self {
         Self::new_range(
-            position_start.unit,
+            // position_start.unit,
             position_start.index,
             position_start.line,
             position_start.column,
@@ -62,7 +62,7 @@ impl Location {
         position_end_included: &Location,
     ) -> Self {
         Self::new_range(
-            position_start.unit,
+            // position_start.unit,
             position_start.index,
             position_start.line,
             position_start.column,
@@ -73,7 +73,7 @@ impl Location {
     /// Combine two ranges into a new range
     pub fn from_range_pair(range_start: &Location, range_end: &Location) -> Self {
         Self::new_range(
-            range_start.unit,
+            // range_start.unit,
             range_start.index,
             range_start.line,
             range_start.column,
@@ -83,15 +83,15 @@ impl Location {
 
     /// Convert Range to Position
     pub fn get_position_by_range_start(&self) -> Self {
-        Self::new_position(self.unit, self.index, self.line, self.column)
+        Self::new_position(/* self.unit, */ self.index, self.line, self.column)
     }
 
-    /// Convert Range to Position
-    pub fn get_position_by_range_end(&self) -> Self {
-        let index = self.index + self.length;
-        let column = self.column + self.length;
-        Self::new_position(self.unit, index, self.line, column)
-    }
+    // Convert Range to Position
+    // pub fn get_position_by_range_end(&self) -> Self {
+    //     let index = self.index + self.length;
+    //     let column = self.column + self.length;
+    //     Self::new_position(self.unit, index, self.line, column)
+    // }
 
     pub fn move_position_forward(&self) -> Self {
         Self {

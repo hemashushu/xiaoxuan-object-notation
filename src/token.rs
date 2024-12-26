@@ -17,6 +17,7 @@ pub enum Token {
 
     // `,`
     Comma,
+
     // `:`
     Colon,
 
@@ -58,52 +59,10 @@ pub enum Token {
     Char(char),
     String(String),
     Date(DateTime<FixedOffset>),
-    ByteData(Vec<u8>),
+    HexByteData(Vec<u8>),
 
     Comment(Comment),
 }
-
-// impl Token {
-//     // for printing
-//     pub fn get_description(&self) -> String {
-//         match self {
-//             Token::NewLine => "new line".to_owned(),
-//             Token::Comma => "comma \",\"".to_owned(),
-//             Token::Colon => "colon \":\"".to_owned(),
-//             Token::LeftBrace => "left brace \"{\"".to_owned(),
-//             Token::RightBrace => "right brace \"}\"".to_owned(),
-//             Token::LeftBracket => "left bracket \"[\"".to_owned(),
-//             Token::RightBracket => "right bracket \"]\"".to_owned(),
-//             Token::LeftParen => "left parenthese \"(\"".to_owned(),
-//             Token::RightParen => "right parenthese \")\"".to_owned(),
-//             Token::Plus => "plus sign \"+\"".to_owned(),
-//             Token::Minus => "minus sign \"-\"".to_owned(),
-//             Token::Identifier(id) => format!("identifier \"{}\"", id),
-//             Token::Boolean(b) => format!("boolean \"{}\"", b),
-//             Token::Variant(t, m) => format!("variant \"{}::{}\"", t, m),
-//             Token::Number(n) => format!(
-//                 "number \"{}\"",
-//                 match n {
-//                     NumberToken::U8(v) => v.to_string(),
-//                     NumberToken::I8(v) => v.to_string(),
-//                     NumberToken::I16(v) => v.to_string(),
-//                     NumberToken::U16(v) => v.to_string(),
-//                     NumberToken::I32(v) => v.to_string(),
-//                     NumberToken::U32(v) => v.to_string(),
-//                     NumberToken::I64(v) => v.to_string(),
-//                     NumberToken::U64(v) => v.to_string(),
-//                     NumberToken::F32(v) => v.to_string(),
-//                     NumberToken::F64(v) => v.to_string(),
-//                 }
-//             ),
-//             Token::Char(c) => format!("char \"{}\"", c),
-//             Token::String(_) => "string".to_owned(),
-//             Token::Date(_) => "date".to_owned(),
-//             Token::ByteData(_) => "byte data".to_owned(),
-//             Token::Comment(_) => "comment".to_owned(),
-//         }
-//     }
-// }
 
 #[derive(Debug, PartialEq)]
 pub enum NumberToken {
@@ -204,19 +163,5 @@ impl TokenWithRange {
             token,
             range: Location::from_position_and_length(position, length),
         }
-    }
-}
-
-impl Token {
-    pub fn new_variant(type_name: &str, member_name: &str) -> Self {
-        Token::Variant(type_name.to_owned(), member_name.to_owned())
-    }
-
-    pub fn new_identifier(s: &str) -> Self {
-        Token::Identifier(s.to_owned())
-    }
-
-    pub fn new_string(s: &str) -> Self {
-        Token::String(s.to_owned())
     }
 }

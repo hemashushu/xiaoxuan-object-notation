@@ -31,8 +31,8 @@ pub struct KeyValuePair {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct KeyValuePairExtend {
-    pub key: Box<AsonNode>,
+pub struct NameValuePair {
+    pub name: Box<AsonNode>,
     pub value: Box<AsonNode>,
 }
 
@@ -63,11 +63,11 @@ pub enum AsonNode {
     String(String),
     DateTime(DateTime<FixedOffset>),
     Variant(Variant),
-    ByteData(Vec<u8>),
+    HexByteData(Vec<u8>),
     List(Vec<AsonNode>),
     Tuple(Vec<AsonNode>),
     Object(Vec<KeyValuePair>),
-    Map(Vec<KeyValuePairExtend>),
+    Map(Vec<NameValuePair>),
 }
 
 impl KeyValuePair {

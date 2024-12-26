@@ -4,72 +4,68 @@
 // the Mozilla Public License version 2.0 and additional exceptions,
 // more details in file LICENSE, LICENSE.additional and CONTRIBUTING.
 
+pub const LEXER_PEEK_CHAR_MAX_COUNT: usize = 3;
+
 use chrono::DateTime;
 
 use crate::{
-    charposition::CharWithPosition,
-    error::Error,
+    charwithposition::CharWithPosition,
     location::Location,
     peekableiter::PeekableIter,
     token::{Comment, NumberToken, NumberType, Token, TokenWithRange},
+    AsonError,
 };
 
-pub const LEXER_PEEK_CHAR_MAX_COUNT: usize = 3;
-
-pub struct TokenIter<'a> {
-    upstream: &'a mut PeekableIter<'a, Result<CharWithPosition, Error>>,
+pub struct Lexer<'a> {
+    upstream: &'a mut PeekableIter<'a, CharWithPosition>,
     last_position: Location,
     saved_positions: Vec<Location>,
 }
 
-impl<'a> TokenIter<'a> {
-    pub fn new(upstream: &'a mut PeekableIter<'a, Result<CharWithPosition, Error>>) -> Self {
+impl<'a> Lexer<'a> {
+    pub fn new(upstream: &'a mut PeekableIter<'a, CharWithPosition>) -> Self {
         Self {
             upstream,
-            last_position: Location::new_position(0, 0, 0, 0),
+            last_position: Location::new_position(/*0,*/ 0, 0, 0),
             saved_positions: vec![],
         }
     }
 
-    fn next_char(&mut self) -> Result<Option<char>, Error> {
+    fn next_char(&mut self) -> Option<char> {
         match self.upstream.next() {
-            Some(Ok(CharWithPosition {
+            Some(CharWithPosition {
                 character,
                 position,
-            })) => {
+            }) => {
                 self.last_position = position;
-                Ok(Some(character))
+                Some(character)
             }
-            Some(Err(e)) => Err(e),
-            None => Ok(None),
+            None => None,
         }
     }
 
-    fn peek_char(&self, offset: usize) -> Result<Option<&char>, Error> {
+    fn peek_char(&self, offset: usize) -> Option<&char> {
         match self.upstream.peek(offset) {
-            Some(Ok(CharWithPosition { character, .. })) => Ok(Some(character)),
-            Some(Err(e)) => Err(e.clone()),
-            None => Ok(None),
+            Some(CharWithPosition { character, .. }) => Some(character),
+            None => None,
         }
     }
 
     fn peek_char_and_equals(&self, offset: usize, expected_char: char) -> bool {
         matches!(
             self.upstream.peek(offset),
-            Some(Ok(CharWithPosition { character, .. })) if character == &expected_char)
+            Some(CharWithPosition { character, .. }) if character == &expected_char)
     }
 
-    fn peek_position(&self, offset: usize) -> Result<Option<&Location>, Error> {
+    fn peek_position(&self, offset: usize) -> Option<&Location> {
         match self.upstream.peek(offset) {
-            Some(Ok(CharWithPosition { position, .. })) => Ok(Some(position)),
-            Some(Err(e)) => Err(e.clone()),
-            None => Ok(None),
+            Some(CharWithPosition { position, .. }) => Some(position),
+            None => None,
         }
     }
 
     fn push_peek_position(&mut self) {
-        self.saved_positions
-            .push(*self.peek_position(0).unwrap().unwrap());
+        self.saved_positions.push(*self.peek_position(0).unwrap());
     }
 
     fn pop_saved_position(&mut self) -> Location {
@@ -77,48 +73,45 @@ impl<'a> TokenIter<'a> {
     }
 }
 
-impl<'a> Iterator for TokenIter<'a> {
-    type Item = Result<TokenWithRange, Error>;
+impl Iterator for Lexer<'_> {
+    type Item = Result<TokenWithRange, AsonError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // skip all whitespaces
         loop {
             match self.peek_char(0) {
-                Ok(Some(' ' | '\t')) => {
-                    self.next_char().unwrap();
+                Some(' ' | '\t') => {
+                    self.next_char();
                 }
-                Ok(Some(_)) => {
+                Some(_) => {
                     break;
                 }
-                Ok(None) => {
+                None => {
                     return None;
-                }
-                Err(e) => {
-                    return Some(Err(e));
                 }
             }
         }
 
         // lex next token
+        #[allow(clippy::manual_map)]
         match self.peek_char(0) {
-            Ok(Some(_)) => Some(self.lex_token()),
-            Ok(None) => None,
-            Err(e) => Some(Err(e)),
+            Some(_) => Some(self.lex()),
+            None => None,
         }
     }
 }
 
-impl<'a> TokenIter<'a> {
-    fn lex_token(&mut self) -> Result<TokenWithRange, Error> {
+impl Lexer<'_> {
+    fn lex(&mut self) -> Result<TokenWithRange, AsonError> {
         // c....
         // ^____ current char, not EOF, validated
 
-        match self.peek_char(0).unwrap().unwrap() {
+        match self.peek_char(0).unwrap() {
             '\r' if self.peek_char_and_equals(1, '\n') => {
                 self.push_peek_position();
 
-                self.next_char()?; // consume '\r'
-                self.next_char()?; // consume '\n'
+                self.next_char(); // consume '\r'
+                self.next_char(); // consume '\n'
 
                 Ok(TokenWithRange::from_position_and_length(
                     Token::NewLine,
@@ -127,7 +120,7 @@ impl<'a> TokenIter<'a> {
                 ))
             }
             '\n' => {
-                self.next_char()?; // consule '\n'
+                self.next_char(); // consule '\n'
 
                 Ok(TokenWithRange::from_position_and_length(
                     Token::NewLine,
@@ -136,7 +129,7 @@ impl<'a> TokenIter<'a> {
                 ))
             }
             ',' => {
-                self.next_char()?; // consume ','
+                self.next_char(); // consume ','
 
                 Ok(TokenWithRange::from_position_and_length(
                     Token::Comma,
@@ -145,7 +138,7 @@ impl<'a> TokenIter<'a> {
                 ))
             }
             ':' => {
-                self.next_char()?; // consule ':'
+                self.next_char(); // consule ':'
 
                 // note that this is the standalone colon.
                 // it does not include the seperator "::" which is
@@ -157,7 +150,7 @@ impl<'a> TokenIter<'a> {
                 ))
             }
             '{' => {
-                self.next_char()?; // consule '{'
+                self.next_char(); // consule '{'
 
                 Ok(TokenWithRange::from_position_and_length(
                     Token::LeftBrace,
@@ -166,7 +159,7 @@ impl<'a> TokenIter<'a> {
                 ))
             }
             '}' => {
-                self.next_char()?; // consule '}'
+                self.next_char(); // consule '}'
 
                 Ok(TokenWithRange::from_position_and_length(
                     Token::RightBrace,
@@ -175,7 +168,7 @@ impl<'a> TokenIter<'a> {
                 ))
             }
             '[' => {
-                self.next_char()?; // consule '['
+                self.next_char(); // consule '['
 
                 Ok(TokenWithRange::from_position_and_length(
                     Token::LeftBracket,
@@ -184,7 +177,7 @@ impl<'a> TokenIter<'a> {
                 ))
             }
             ']' => {
-                self.next_char()?; // consule ']'
+                self.next_char(); // consule ']'
 
                 Ok(TokenWithRange::from_position_and_length(
                     Token::RightBracket,
@@ -193,7 +186,7 @@ impl<'a> TokenIter<'a> {
                 ))
             }
             '(' => {
-                self.next_char()?; // consule '('
+                self.next_char(); // consule '('
 
                 Ok(TokenWithRange::from_position_and_length(
                     Token::LeftParen,
@@ -202,7 +195,7 @@ impl<'a> TokenIter<'a> {
                 ))
             }
             ')' => {
-                self.next_char()?; // consule ')'
+                self.next_char(); // consule ')'
 
                 Ok(TokenWithRange::from_position_and_length(
                     Token::RightParen,
@@ -211,7 +204,7 @@ impl<'a> TokenIter<'a> {
                 ))
             }
             '+' => {
-                self.next_char()?; // consule '+'
+                self.next_char(); // consule '+'
 
                 Ok(TokenWithRange::from_position_and_length(
                     Token::Plus,
@@ -220,7 +213,7 @@ impl<'a> TokenIter<'a> {
                 ))
             }
             '-' => {
-                self.next_char()?; // consule '-'
+                self.next_char(); // consule '-'
 
                 Ok(TokenWithRange::from_position_and_length(
                     Token::Minus,
@@ -234,7 +227,7 @@ impl<'a> TokenIter<'a> {
             }
             'h' if self.peek_char_and_equals(1, '"') => {
                 // hex byte data
-                self.lex_byte_data_hexadecimal()
+                self.lex_hexadecimal_byte_data()
             }
             'd' if self.peek_char_and_equals(1, '"') => {
                 // date
@@ -249,6 +242,7 @@ impl<'a> TokenIter<'a> {
                 self.lex_raw_string_with_hash_symbol()
             }
             '"' => {
+                // string
                 if self.peek_char_and_equals(1, '"') && self.peek_char_and_equals(2, '"') {
                     // auto-trimmed string
                     self.lex_auto_trimmed_string()
@@ -270,17 +264,17 @@ impl<'a> TokenIter<'a> {
                 self.lex_block_comment()
             }
             'a'..='z' | 'A'..='Z' | '_' | '\u{a0}'..='\u{d7ff}' | '\u{e000}'..='\u{10ffff}' => {
-                // identifier (the key name of struct/object) or keyword
-                self.lex_identifier_or_keyword()
+                // identifier/name/keyword
+                self.lex_identifier()
             }
-            current_char => Err(Error::MessageWithLocation(
+            current_char => Err(AsonError::MessageWithLocation(
                 format!("Unexpected char '{}'.", current_char),
-                *self.peek_position(0).unwrap().unwrap(),
+                *self.peek_position(0).unwrap(),
             )),
         }
     }
 
-    fn lex_identifier_or_keyword(&mut self) -> Result<TokenWithRange, Error> {
+    fn lex_identifier(&mut self) -> Result<TokenWithRange, AsonError> {
         // key_nameT  //
         // ^       ^__// to here
         // |__________// current char, validated
@@ -293,17 +287,17 @@ impl<'a> TokenIter<'a> {
 
         self.push_peek_position();
 
-        while let Some(current_char) = self.peek_char(0)? {
+        while let Some(current_char) = self.peek_char(0) {
             match current_char {
                 '0'..='9' | 'a'..='z' | 'A'..='Z' | '_' => {
                     name_string.push(*current_char);
-                    self.next_char()?; // consume char
+                    self.next_char(); // consume char
                 }
                 ':' if self.peek_char_and_equals(1, ':') => {
                     found_double_colon = true;
                     name_string.push_str("::");
-                    self.next_char()?; // consume 1st ":"
-                    self.next_char()?; // consume 2nd ":"
+                    self.next_char(); // consume 1st ":"
+                    self.next_char(); // consume 2nd ":"
                 }
                 '\u{a0}'..='\u{d7ff}' | '\u{e000}'..='\u{10ffff}' => {
                     // A char is a ‘Unicode scalar value’, which is any ‘Unicode code point’ other than a surrogate code point.
@@ -339,7 +333,7 @@ impl<'a> TokenIter<'a> {
                     // https://www.unicode.org/reports/tr31/tr31-37.html
 
                     name_string.push(*current_char);
-                    self.next_char()?; // consume char
+                    self.next_char(); // consume char
                 }
                 ' ' | '\t' | '\r' | '\n' | ',' | ':' | '{' | '}' | '[' | ']' | '(' | ')' | '/'
                 | '\'' | '"' => {
@@ -347,13 +341,18 @@ impl<'a> TokenIter<'a> {
                     break;
                 }
                 _ => {
-                    return Err(Error::MessageWithLocation(
+                    return Err(AsonError::MessageWithLocation(
                         format!("Invalid char '{}' for identifier.", current_char),
-                        *self.peek_position(0).unwrap().unwrap(),
+                        *self.peek_position(0).unwrap(),
                     ));
                 }
             }
         }
+
+        let name_range = Location::from_position_pair_with_end_included(
+            &self.pop_saved_position(),
+            &self.last_position,
+        );
 
         let token = if found_double_colon {
             let (type_name, member_name) = name_string.split_once("::").unwrap();
@@ -370,58 +369,10 @@ impl<'a> TokenIter<'a> {
             }
         };
 
-        let name_range = Location::from_position_pair_with_end_included(
-            &self.pop_saved_position(),
-            &self.last_position,
-        );
-
         Ok(TokenWithRange::new(token, name_range))
     }
 
-    // Number formats
-    //
-    // decimal:
-    //
-    // 123
-    // 123.456
-    // -123
-    // 1.23e4
-    // 1.23e+4
-    // 1.23e-4
-    // -1.23e4
-    //
-    // hexadecimal:
-    //
-    // 0xabcd
-    // -0xaabb
-    // 0xabcd_u32
-    //
-    // hexadecimal floating-point:
-    // refer: https://www.ibm.com/docs/en/i/7.5?topic=literals-hexadecimal-floating-point
-    //
-    // 0x1.23p4
-    // 0x1.23p+4
-    // 0x1.23p-4
-    // 0x1.23p4_f64
-    //
-    // binary:
-    //
-    // 0b0011
-    // -0b1100
-    // 0b0011_u16
-    //
-    // Number data types:
-    //
-    // - i32, u32
-    // - i64, u64
-    // - i8,  u8
-    // - i16, u16
-    // - f32, f64
-    //
-    // the default type of integer numbers is i32
-    // the default type of floating-point numbers is f64
-
-    fn lex_number(&mut self) -> Result<TokenWithRange, Error> {
+    fn lex_number(&mut self) -> Result<TokenWithRange, AsonError> {
         // 123456T  //
         // ^     ^__// to here
         // |________// current char, validated
@@ -441,7 +392,7 @@ impl<'a> TokenIter<'a> {
         }
     }
 
-    fn lex_number_decimal(&mut self) -> Result<TokenWithRange, Error> {
+    fn lex_number_decimal(&mut self) -> Result<TokenWithRange, AsonError> {
         // 123456T  //
         // ^     ^__// to here
         // |________// current char, validated
@@ -463,22 +414,22 @@ impl<'a> TokenIter<'a> {
 
         self.push_peek_position();
 
-        while let Some(current_char) = self.peek_char(0)? {
+        while let Some(current_char) = self.peek_char(0) {
             match current_char {
                 '0'..='9' => {
                     // valid digits for decimal number
                     num_string.push(*current_char);
 
-                    self.next_char()?; // consume digit
+                    self.next_char(); // consume digit
                 }
                 '_' => {
-                    self.next_char()?; // consume '_'
+                    self.next_char(); // consume '_'
                 }
                 '.' if !found_point => {
                     found_point = true;
                     num_string.push(*current_char);
 
-                    self.next_char()?; // consume '.'
+                    self.next_char(); // consume '.'
                 }
                 'e' if !found_e => {
                     found_e = true;
@@ -488,19 +439,19 @@ impl<'a> TokenIter<'a> {
                     // 123e-45
                     if self.peek_char_and_equals(1, '-') {
                         num_string.push_str("e-");
-                        self.next_char()?; // consume 'e'
-                        self.next_char()?; // consume '-'
+                        self.next_char(); // consume 'e'
+                        self.next_char(); // consume '-'
                     } else if self.peek_char_and_equals(1, '+') {
                         num_string.push_str("e+");
-                        self.next_char()?; // consume 'e'
-                        self.next_char()?; // consume '+'
+                        self.next_char(); // consume 'e'
+                        self.next_char(); // consume '+'
                     } else {
                         num_string.push(*current_char);
-                        self.next_char()?; // consume 'e'
+                        self.next_char(); // consume 'e'
                     }
                 }
                 'i' | 'u' | 'f'
-                    if num_type.is_none() && matches!(self.peek_char(1)?, Some('0'..='9')) =>
+                    if num_type.is_none() && matches!(self.peek_char(1), Some('0'..='9')) =>
                 {
                     let nt = self.lex_number_type_suffix()?;
                     num_type.replace(nt);
@@ -512,9 +463,9 @@ impl<'a> TokenIter<'a> {
                     break;
                 }
                 _ => {
-                    return Err(Error::MessageWithLocation(
+                    return Err(AsonError::MessageWithLocation(
                         format!("Invalid char '{}' for decimal number.", current_char),
-                        *self.peek_position(0).unwrap().unwrap(),
+                        *self.peek_position(0).unwrap(),
                     ));
                 }
             }
@@ -522,14 +473,14 @@ impl<'a> TokenIter<'a> {
 
         // check syntax
         if num_string.ends_with('.') {
-            return Err(Error::MessageWithLocation(
+            return Err(AsonError::MessageWithLocation(
                 "Decimal number can not ends with \".\".".to_owned(),
                 self.last_position,
             ));
         }
 
         if num_string.ends_with('e') {
-            return Err(Error::MessageWithLocation(
+            return Err(AsonError::MessageWithLocation(
                 "Decimal number can not ends with \"e\".".to_owned(),
                 self.last_position,
             ));
@@ -545,7 +496,7 @@ impl<'a> TokenIter<'a> {
             match nt {
                 NumberType::I8 => {
                     let v = num_string.parse::<u8>().map_err(|_| {
-                        Error::MessageWithLocation(
+                        AsonError::MessageWithLocation(
                             format!("Can not convert \"{}\" to i8 integer number.", num_string),
                             num_range,
                         )
@@ -555,7 +506,7 @@ impl<'a> TokenIter<'a> {
                 }
                 NumberType::U8 => {
                     let v = num_string.parse::<u8>().map_err(|_| {
-                        Error::MessageWithLocation(
+                        AsonError::MessageWithLocation(
                             format!("Can not convert \"{}\" to u8 integer number.", num_string),
                             num_range,
                         )
@@ -565,7 +516,7 @@ impl<'a> TokenIter<'a> {
                 }
                 NumberType::I16 => {
                     let v = num_string.parse::<u16>().map_err(|_| {
-                        Error::MessageWithLocation(
+                        AsonError::MessageWithLocation(
                             format!("Can not convert \"{}\" to i16 integer number.", num_string),
                             num_range,
                         )
@@ -575,7 +526,7 @@ impl<'a> TokenIter<'a> {
                 }
                 NumberType::U16 => {
                     let v = num_string.parse::<u16>().map_err(|_| {
-                        Error::MessageWithLocation(
+                        AsonError::MessageWithLocation(
                             format!("Can not convert \"{}\" to u16 integer number.", num_string),
                             num_range,
                         )
@@ -585,7 +536,7 @@ impl<'a> TokenIter<'a> {
                 }
                 NumberType::I32 => {
                     let v = num_string.parse::<u32>().map_err(|_| {
-                        Error::MessageWithLocation(
+                        AsonError::MessageWithLocation(
                             format!("Can not convert \"{}\" to i32 integer number.", num_string),
                             num_range,
                         )
@@ -595,7 +546,7 @@ impl<'a> TokenIter<'a> {
                 }
                 NumberType::U32 => {
                     let v = num_string.parse::<u32>().map_err(|_| {
-                        Error::MessageWithLocation(
+                        AsonError::MessageWithLocation(
                             format!("Can not convert \"{}\" to u32 integer number.", num_string),
                             num_range,
                         )
@@ -605,7 +556,7 @@ impl<'a> TokenIter<'a> {
                 }
                 NumberType::I64 => {
                     let v = num_string.parse::<u64>().map_err(|_| {
-                        Error::MessageWithLocation(
+                        AsonError::MessageWithLocation(
                             format!("Can not convert \"{}\" to i64 integer number.", num_string),
                             num_range,
                         )
@@ -615,7 +566,7 @@ impl<'a> TokenIter<'a> {
                 }
                 NumberType::U64 => {
                     let v = num_string.parse::<u64>().map_err(|_| {
-                        Error::MessageWithLocation(
+                        AsonError::MessageWithLocation(
                             format!("Can not convert \"{}\" to u64 integer number.", num_string),
                             num_range,
                         )
@@ -625,7 +576,7 @@ impl<'a> TokenIter<'a> {
                 }
                 NumberType::F32 => {
                     let v = num_string.parse::<f32>().map_err(|_| {
-                        Error::MessageWithLocation(
+                        AsonError::MessageWithLocation(
                             format!(
                                 "Can not convert \"{}\" to f32 floating-point number.",
                                 num_string
@@ -636,7 +587,7 @@ impl<'a> TokenIter<'a> {
 
                     // overflow when parsing from string
                     if v.is_infinite() {
-                        return Err(Error::MessageWithLocation(
+                        return Err(AsonError::MessageWithLocation(
                             format!("F32 floating point number \"{}\" is overflow.", num_string),
                             num_range,
                         ));
@@ -646,7 +597,7 @@ impl<'a> TokenIter<'a> {
                 }
                 NumberType::F64 => {
                     let v = num_string.parse::<f64>().map_err(|_| {
-                        Error::MessageWithLocation(
+                        AsonError::MessageWithLocation(
                             format!(
                                 "Can not convert \"{}\" to f64 floating-point number.",
                                 num_string
@@ -657,7 +608,7 @@ impl<'a> TokenIter<'a> {
 
                     // overflow when parsing from string
                     if v.is_infinite() {
-                        return Err(Error::MessageWithLocation(
+                        return Err(AsonError::MessageWithLocation(
                             format!("F64 floating point number \"{}\" is overflow.", num_string),
                             num_range,
                         ));
@@ -670,7 +621,7 @@ impl<'a> TokenIter<'a> {
             // the default floating-point number type is f64
 
             let v = num_string.parse::<f64>().map_err(|_| {
-                Error::MessageWithLocation(
+                AsonError::MessageWithLocation(
                     format!(
                         "Can not convert \"{}\" to f64 floating-point number.",
                         num_string
@@ -681,7 +632,7 @@ impl<'a> TokenIter<'a> {
 
             // overflow when parsing from string
             if v.is_infinite() {
-                return Err(Error::MessageWithLocation(
+                return Err(AsonError::MessageWithLocation(
                     format!("F64 floating point number \"{}\" is overflow.", num_string),
                     num_range,
                 ));
@@ -692,7 +643,7 @@ impl<'a> TokenIter<'a> {
             // the default integer number type is i32
 
             let v = num_string.parse::<u32>().map_err(|_| {
-                Error::MessageWithLocation(
+                AsonError::MessageWithLocation(
                     format!("Can not convert \"{}\" to i32 integer number.", num_string,),
                     num_range,
                 )
@@ -704,7 +655,7 @@ impl<'a> TokenIter<'a> {
         Ok(TokenWithRange::new(Token::Number(num_token), num_range))
     }
 
-    fn lex_number_type_suffix(&mut self) -> Result<NumberType, Error> {
+    fn lex_number_type_suffix(&mut self) -> Result<NumberType, AsonError> {
         // iddT  //
         // ^^ ^__// to here
         // ||____// d = 0..9, validated
@@ -716,19 +667,19 @@ impl<'a> TokenIter<'a> {
 
         self.push_peek_position();
 
-        let first_char = self.next_char()?.unwrap(); // consume char 'i/u/f'
+        let first_char = self.next_char().unwrap(); // consume char 'i/u/f'
 
         let mut type_name = String::new();
         type_name.push(first_char);
 
-        while let Some(current_char) = self.peek_char(0)? {
+        while let Some(current_char) = self.peek_char(0) {
             match current_char {
                 '0'..='9' => {
                     // valid char for type name
                     type_name.push(*current_char);
 
                     // consume digit
-                    self.next_char()?;
+                    self.next_char();
                 }
                 _ => {
                     break;
@@ -742,12 +693,12 @@ impl<'a> TokenIter<'a> {
         );
 
         let nt = NumberType::from_str(&type_name)
-            .map_err(|msg| Error::MessageWithLocation(msg, type_range))?;
+            .map_err(|msg| AsonError::MessageWithLocation(msg, type_range))?;
 
         Ok(nt)
     }
 
-    fn lex_number_hex(&mut self) -> Result<TokenWithRange, Error> {
+    fn lex_number_hex(&mut self) -> Result<TokenWithRange, AsonError> {
         // 0xaabbT  //
         // ^^    ^__// to here
         // ||_______// validated
@@ -757,8 +708,8 @@ impl<'a> TokenIter<'a> {
 
         self.push_peek_position();
 
-        self.next_char()?; // consume '0'
-        self.next_char()?; // consume 'x'
+        self.next_char(); // consume '0'
+        self.next_char(); // consume 'x'
 
         let mut num_string = String::new();
         let mut num_type: Option<NumberType> = None; // "_ixx", "_uxx"
@@ -766,11 +717,11 @@ impl<'a> TokenIter<'a> {
         let mut found_point: bool = false; // to indicated whether char '.' is found
         let mut found_p: bool = false; // to indicated whether char 'p' is found
 
-        while let Some(current_char) = self.peek_char(0)? {
+        while let Some(current_char) = self.peek_char(0) {
             match current_char {
                 'f' if num_type.is_none()
                     && found_p
-                    && matches!(self.peek_char(1)?, Some('0'..='9')) =>
+                    && matches!(self.peek_char(1), Some('0'..='9')) =>
                 {
                     // 'f' is allowed only in the hex floating point literal mode, (i.e. the
                     //  character 'p' should be detected first)
@@ -782,10 +733,10 @@ impl<'a> TokenIter<'a> {
                     // valid digits for hex number
                     num_string.push(*current_char);
 
-                    self.next_char()?; // consume digit
+                    self.next_char(); // consume digit
                 }
                 '_' => {
-                    self.next_char()?; // consume '_'
+                    self.next_char(); // consume '_'
                 }
                 '.' if !found_point && !found_p => {
                     // going to be hex floating point literal mode
@@ -793,7 +744,7 @@ impl<'a> TokenIter<'a> {
 
                     num_string.push(*current_char);
 
-                    self.next_char()?; // consume '.'
+                    self.next_char(); // consume '.'
                 }
                 'p' | 'P' if !found_p => {
                     // hex floating point literal mode
@@ -804,22 +755,22 @@ impl<'a> TokenIter<'a> {
                     // 0x0.123p-45
                     if self.peek_char_and_equals(1, '-') {
                         num_string.push_str("p-");
-                        self.next_char()?; // consume 'p'
-                        self.next_char()?; // consume '-'
+                        self.next_char(); // consume 'p'
+                        self.next_char(); // consume '-'
                     } else if self.peek_char_and_equals(1, '+') {
                         num_string.push_str("p+");
-                        self.next_char()?; // consume 'p'
-                        self.next_char()?; // consume '+'
+                        self.next_char(); // consume 'p'
+                        self.next_char(); // consume '+'
                     } else {
                         num_string.push(*current_char);
-                        self.next_char()?; // consume 'p'
+                        self.next_char(); // consume 'p'
                     }
                 }
                 'i' | 'u'
                     if num_type.is_none()
                         && !found_point
                         && !found_p
-                        && matches!(self.peek_char(1)?, Some('0'..='9')) =>
+                        && matches!(self.peek_char(1), Some('0'..='9')) =>
                 {
                     // only 'i' and 'u' are allowed for hexadecimal integer numbers,
                     // and 'f' is a ordinary hex digit.
@@ -834,9 +785,9 @@ impl<'a> TokenIter<'a> {
                     break;
                 }
                 _ => {
-                    return Err(Error::MessageWithLocation(
+                    return Err(AsonError::MessageWithLocation(
                         format!("Invalid char '{}' for hexadecimal number.", current_char),
-                        *self.peek_position(0).unwrap().unwrap(),
+                        *self.peek_position(0).unwrap(),
                     ));
                 }
             }
@@ -848,14 +799,14 @@ impl<'a> TokenIter<'a> {
         );
 
         if num_string.is_empty() {
-            return Err(Error::MessageWithLocation(
+            return Err(AsonError::MessageWithLocation(
                 "Empty hexadecimal number".to_owned(),
                 num_range,
             ));
         }
 
         if found_point && !found_p {
-            return Err(Error::MessageWithLocation(
+            return Err(AsonError::MessageWithLocation(
                 format!(
                     "Hexadecimal floating point number \"{}\" is missing the exponent.",
                     num_string
@@ -877,7 +828,7 @@ impl<'a> TokenIter<'a> {
                         to_f64 = true;
                     }
                     _ => {
-                        return Err(Error::MessageWithLocation(format!(
+                        return Err(AsonError::MessageWithLocation(format!(
                                 "Invalid type \"{}\" for hexadecimal floating-point numbers, only type \"f32\" and \"f64\" are allowed.",
                                 nt
                             ),
@@ -892,7 +843,7 @@ impl<'a> TokenIter<'a> {
             if to_f64 {
                 let v = hexfloat2::parse::<f64>(&num_string).map_err(|_| {
                     // there is no detail message provided by `hexfloat2::parse`.
-                    Error::MessageWithLocation(
+                    AsonError::MessageWithLocation(
                         format!(
                             "Can not convert \"{}\" to f64 floating-point number.",
                             num_string
@@ -905,7 +856,7 @@ impl<'a> TokenIter<'a> {
             } else {
                 let v = hexfloat2::parse::<f32>(&num_string).map_err(|_| {
                     // there is no detail message provided by `hexfloat2::parse`.
-                    Error::MessageWithLocation(
+                    AsonError::MessageWithLocation(
                         format!(
                             "Can not convert \"{}\" to f32 floating-point number.",
                             num_string
@@ -920,7 +871,7 @@ impl<'a> TokenIter<'a> {
             match nt {
                 NumberType::I8 => {
                     let v = u8::from_str_radix(&num_string, 16).map_err(|_| {
-                        Error::MessageWithLocation(
+                        AsonError::MessageWithLocation(
                             format!("Can not convert \"{}\" to i8 integer number.", num_string),
                             num_range,
                         )
@@ -930,7 +881,7 @@ impl<'a> TokenIter<'a> {
                 }
                 NumberType::U8 => {
                     let v = u8::from_str_radix(&num_string, 16).map_err(|_| {
-                        Error::MessageWithLocation(
+                        AsonError::MessageWithLocation(
                             format!("Can not convert \"{}\" to u8 integer number.", num_string),
                             num_range,
                         )
@@ -940,7 +891,7 @@ impl<'a> TokenIter<'a> {
                 }
                 NumberType::I16 => {
                     let v = u16::from_str_radix(&num_string, 16).map_err(|_| {
-                        Error::MessageWithLocation(
+                        AsonError::MessageWithLocation(
                             format!("Can not convert \"{}\" to i16 integer number.", num_string),
                             num_range,
                         )
@@ -950,7 +901,7 @@ impl<'a> TokenIter<'a> {
                 }
                 NumberType::U16 => {
                     let v = u16::from_str_radix(&num_string, 16).map_err(|_| {
-                        Error::MessageWithLocation(
+                        AsonError::MessageWithLocation(
                             format!("Can not convert \"{}\" to u16 integer number.", num_string),
                             num_range,
                         )
@@ -960,7 +911,7 @@ impl<'a> TokenIter<'a> {
                 }
                 NumberType::I32 => {
                     let v = u32::from_str_radix(&num_string, 16).map_err(|_| {
-                        Error::MessageWithLocation(
+                        AsonError::MessageWithLocation(
                             format!("Can not convert \"{}\" to i32 integer number.", num_string),
                             num_range,
                         )
@@ -970,7 +921,7 @@ impl<'a> TokenIter<'a> {
                 }
                 NumberType::U32 => {
                     let v = u32::from_str_radix(&num_string, 16).map_err(|_| {
-                        Error::MessageWithLocation(
+                        AsonError::MessageWithLocation(
                             format!("Can not convert \"{}\" to u32 integer number.", num_string),
                             num_range,
                         )
@@ -980,7 +931,7 @@ impl<'a> TokenIter<'a> {
                 }
                 NumberType::I64 => {
                     let v = u64::from_str_radix(&num_string, 16).map_err(|_| {
-                        Error::MessageWithLocation(
+                        AsonError::MessageWithLocation(
                             format!("Can not convert \"{}\" to i64 integer number.", num_string),
                             num_range,
                         )
@@ -990,7 +941,7 @@ impl<'a> TokenIter<'a> {
                 }
                 NumberType::U64 => {
                     let v = u64::from_str_radix(&num_string, 16).map_err(|_| {
-                        Error::MessageWithLocation(
+                        AsonError::MessageWithLocation(
                             format!("Can not convert \"{}\" to u64 integer number.", num_string),
                             num_range,
                         )
@@ -1008,7 +959,7 @@ impl<'a> TokenIter<'a> {
             // default
             // convert to i32
             let v = u32::from_str_radix(&num_string, 16).map_err(|_| {
-                Error::MessageWithLocation(
+                AsonError::MessageWithLocation(
                     format!("Can not convert \"{}\" to i32 integer number.", num_string),
                     num_range,
                 )
@@ -1020,7 +971,7 @@ impl<'a> TokenIter<'a> {
         Ok(TokenWithRange::new(Token::Number(num_token), num_range))
     }
 
-    fn lex_number_binary(&mut self) -> Result<TokenWithRange, Error> {
+    fn lex_number_binary(&mut self) -> Result<TokenWithRange, AsonError> {
         // 0b1010T  //
         // ^^    ^__// to here
         // ||_______// validated
@@ -1030,27 +981,25 @@ impl<'a> TokenIter<'a> {
 
         self.push_peek_position();
 
-        self.next_char()?; // consume '0'
-        self.next_char()?; // consume 'b'
+        self.next_char(); // consume '0'
+        self.next_char(); // consume 'b'
 
         let mut num_string = String::new();
         let mut num_type: Option<NumberType> = None;
 
-        while let Some(current_char) = self.peek_char(0)? {
+        while let Some(current_char) = self.peek_char(0) {
             match current_char {
                 '0' | '1' => {
                     // valid digits for binary number
                     num_string.push(*current_char);
 
-                    self.next_char()?; // consume digit
+                    self.next_char(); // consume digit
                 }
                 '_' => {
-                    self.next_char()?; // consume '_'
+                    self.next_char(); // consume '_'
                 }
                 // binary form only supports integer numbers, does not support floating-point numbers
-                'i' | 'u'
-                    if num_type.is_none() && matches!(self.peek_char(1)?, Some('0'..='9')) =>
-                {
+                'i' | 'u' if num_type.is_none() && matches!(self.peek_char(1), Some('0'..='9')) => {
                     let nt = self.lex_number_type_suffix()?;
                     num_type.replace(nt);
                     break;
@@ -1061,9 +1010,9 @@ impl<'a> TokenIter<'a> {
                     break;
                 }
                 _ => {
-                    return Err(Error::MessageWithLocation(
+                    return Err(AsonError::MessageWithLocation(
                         format!("Invalid char '{}' for binary number.", current_char),
-                        *self.peek_position(0).unwrap().unwrap(),
+                        *self.peek_position(0).unwrap(),
                     ));
                 }
             }
@@ -1075,7 +1024,7 @@ impl<'a> TokenIter<'a> {
         );
 
         if num_string.is_empty() {
-            return Err(Error::MessageWithLocation(
+            return Err(AsonError::MessageWithLocation(
                 "Empty binary number.".to_owned(),
                 num_range,
             ));
@@ -1085,7 +1034,7 @@ impl<'a> TokenIter<'a> {
             match nt {
                 NumberType::I8 => {
                     let v = u8::from_str_radix(&num_string, 2).map_err(|_| {
-                        Error::MessageWithLocation(
+                        AsonError::MessageWithLocation(
                             format!("Can not convert \"{}\" to i8 integer number.", num_string,),
                             num_range,
                         )
@@ -1095,7 +1044,7 @@ impl<'a> TokenIter<'a> {
                 }
                 NumberType::U8 => {
                     let v = u8::from_str_radix(&num_string, 2).map_err(|_| {
-                        Error::MessageWithLocation(
+                        AsonError::MessageWithLocation(
                             format!("Can not convert \"{}\" to u8 integer number.", num_string,),
                             num_range,
                         )
@@ -1105,7 +1054,7 @@ impl<'a> TokenIter<'a> {
                 }
                 NumberType::I16 => {
                     let v = u16::from_str_radix(&num_string, 2).map_err(|_| {
-                        Error::MessageWithLocation(
+                        AsonError::MessageWithLocation(
                             format!("Can not convert \"{}\" to i16 integer number.", num_string,),
                             num_range,
                         )
@@ -1115,7 +1064,7 @@ impl<'a> TokenIter<'a> {
                 }
                 NumberType::U16 => {
                     let v = u16::from_str_radix(&num_string, 2).map_err(|_| {
-                        Error::MessageWithLocation(
+                        AsonError::MessageWithLocation(
                             format!("Can not convert \"{}\" to u16 integer number.", num_string,),
                             num_range,
                         )
@@ -1125,7 +1074,7 @@ impl<'a> TokenIter<'a> {
                 }
                 NumberType::I32 => {
                     let v = u32::from_str_radix(&num_string, 2).map_err(|_| {
-                        Error::MessageWithLocation(
+                        AsonError::MessageWithLocation(
                             format!("Can not convert \"{}\" to i32 integer number.", num_string),
                             num_range,
                         )
@@ -1135,7 +1084,7 @@ impl<'a> TokenIter<'a> {
                 }
                 NumberType::U32 => {
                     let v = u32::from_str_radix(&num_string, 2).map_err(|_| {
-                        Error::MessageWithLocation(
+                        AsonError::MessageWithLocation(
                             format!("Can not convert \"{}\" to u32 integer number.", num_string),
                             num_range,
                         )
@@ -1145,7 +1094,7 @@ impl<'a> TokenIter<'a> {
                 }
                 NumberType::I64 => {
                     let v = u64::from_str_radix(&num_string, 2).map_err(|_| {
-                        Error::MessageWithLocation(
+                        AsonError::MessageWithLocation(
                             format!("Can not convert \"{}\" to i64 integer number.", num_string),
                             num_range,
                         )
@@ -1155,7 +1104,7 @@ impl<'a> TokenIter<'a> {
                 }
                 NumberType::U64 => {
                     let v = u64::from_str_radix(&num_string, 2).map_err(|_| {
-                        Error::MessageWithLocation(
+                        AsonError::MessageWithLocation(
                             format!("Can not convert \"{}\" to u64 integer number.", num_string),
                             num_range,
                         )
@@ -1172,7 +1121,7 @@ impl<'a> TokenIter<'a> {
             // convert to i32
 
             let v = u32::from_str_radix(&num_string, 2).map_err(|_| {
-                Error::MessageWithLocation(
+                AsonError::MessageWithLocation(
                     format!("Can not convert \"{}\" to i32 integer number.", num_string),
                     num_range,
                 )
@@ -1184,21 +1133,21 @@ impl<'a> TokenIter<'a> {
         Ok(TokenWithRange::new(Token::Number(num_token), num_range))
     }
 
-    fn lex_char(&mut self) -> Result<TokenWithRange, Error> {
+    fn lex_char(&mut self) -> Result<TokenWithRange, AsonError> {
         // 'a'?  //
         // ^  ^__// to here
         // |_____// current char, validated
 
         self.push_peek_position();
 
-        self.next_char()?; // consume "'"
+        self.next_char(); // consume "'"
 
-        let ch = match self.next_char()? {
+        let character = match self.next_char() {
             Some(prev_previous_char) => {
                 match prev_previous_char {
                     '\\' => {
                         // escape chars
-                        match self.next_char()? {
+                        match self.next_char() {
                             Some(previous_char) => {
                                 match previous_char {
                                     '\\' => '\\',
@@ -1229,7 +1178,7 @@ impl<'a> TokenIter<'a> {
                                             // unicode code point, e.g. '\u{2d}', '\u{6587}'
                                             self.unescape_unicode()?
                                         } else {
-                                            return Err(Error::MessageWithLocation(
+                                            return Err(AsonError::MessageWithLocation(
                                                 "Missing the brace for unicode escape sequence."
                                                     .to_owned(),
                                                 self.last_position.move_position_forward(),
@@ -1237,7 +1186,7 @@ impl<'a> TokenIter<'a> {
                                         }
                                     }
                                     _ => {
-                                        return Err(Error::MessageWithLocation(
+                                        return Err(AsonError::MessageWithLocation(
                                             format!("Unsupported escape char '{}'.", previous_char),
                                             Location::from_position_and_length(
                                                 &self.last_position.move_position_backward(),
@@ -1249,7 +1198,7 @@ impl<'a> TokenIter<'a> {
                             }
                             None => {
                                 // `\` + EOF
-                                return Err(Error::UnexpectedEndOfDocument(
+                                return Err(AsonError::UnexpectedEndOfDocument(
                                     "Incomplete escape character sequence.".to_owned(),
                                 ));
                             }
@@ -1257,7 +1206,7 @@ impl<'a> TokenIter<'a> {
                     }
                     '\'' => {
                         // `''`
-                        return Err(Error::MessageWithLocation(
+                        return Err(AsonError::MessageWithLocation(
                             "Empty char.".to_owned(),
                             Location::from_position_pair_with_end_included(
                                 &self.pop_saved_position(),
@@ -1273,57 +1222,57 @@ impl<'a> TokenIter<'a> {
             }
             None => {
                 // `'EOF`
-                return Err(Error::UnexpectedEndOfDocument(
+                return Err(AsonError::UnexpectedEndOfDocument(
                     "Incomplete character.".to_owned(),
                 ));
             }
         };
 
         // consume the right single quote
-        match self.next_char()? {
+        match self.next_char() {
             Some('\'') => {
                 // Ok
             }
             Some(_) => {
                 // `'a?`
-                return Err(Error::MessageWithLocation(
+                return Err(AsonError::MessageWithLocation(
                     "Expected a quote for char".to_owned(),
                     self.last_position,
                 ));
             }
             None => {
                 // `'aEOF`
-                return Err(Error::UnexpectedEndOfDocument(
+                return Err(AsonError::UnexpectedEndOfDocument(
                     "Incomplete character.".to_owned(),
                 ));
             }
         }
 
-        let ch_range = Location::from_position_pair_with_end_included(
+        let character_range = Location::from_position_pair_with_end_included(
             &self.pop_saved_position(),
             &self.last_position,
         );
-        Ok(TokenWithRange::new(Token::Char(ch), ch_range))
+        Ok(TokenWithRange::new(Token::Char(character), character_range))
     }
 
-    fn unescape_unicode(&mut self) -> Result<char, Error> {
+    fn unescape_unicode(&mut self) -> Result<char, AsonError> {
         // \u{6587}?  //
         //   ^     ^__// to here
         //   |________// current char, validated
 
         self.push_peek_position();
 
-        self.next_char()?; // comsume char '{'
+        self.next_char(); // comsume char '{'
 
         let mut codepoint_string = String::new();
 
         loop {
-            match self.next_char()? {
+            match self.next_char() {
                 Some(previous_char) => match previous_char {
                     '}' => break,
                     '0'..='9' | 'a'..='f' | 'A'..='F' => codepoint_string.push(previous_char),
                     _ => {
-                        return Err(Error::MessageWithLocation(
+                        return Err(AsonError::MessageWithLocation(
                             format!(
                                 "Invalid character '{}' for unicode escape sequence.",
                                 previous_char
@@ -1334,7 +1283,7 @@ impl<'a> TokenIter<'a> {
                 },
                 None => {
                     // EOF
-                    return Err(Error::UnexpectedEndOfDocument(
+                    return Err(AsonError::UnexpectedEndOfDocument(
                         "Incomplete unicode escape sequence.".to_owned(),
                     ));
                 }
@@ -1351,14 +1300,14 @@ impl<'a> TokenIter<'a> {
         );
 
         if codepoint_string.len() > 6 {
-            return Err(Error::MessageWithLocation(
+            return Err(AsonError::MessageWithLocation(
                 "Unicode point code exceeds six digits.".to_owned(),
                 codepoint_range,
             ));
         }
 
         if codepoint_string.is_empty() {
-            return Err(Error::MessageWithLocation(
+            return Err(AsonError::MessageWithLocation(
                 "Empty unicode code point.".to_owned(),
                 codepoint_range,
             ));
@@ -1374,67 +1323,67 @@ impl<'a> TokenIter<'a> {
             // https://doc.rust-lang.org/std/primitive.char.html
             Ok(ch)
         } else {
-            Err(Error::MessageWithLocation(
+            Err(AsonError::MessageWithLocation(
                 "Invalid unicode code point.".to_owned(),
                 codepoint_range,
             ))
         }
     }
 
-    fn lex_string(&mut self) -> Result<TokenWithRange, Error> {
+    fn lex_string(&mut self) -> Result<TokenWithRange, AsonError> {
         // "abc"?  //
         // ^    ^__// to here
         // |_______// current char, validated
 
         self.push_peek_position();
 
-        self.next_char()?; // consume '"'
+        self.next_char(); // consume '"'
 
-        let mut ss = String::new();
+        let mut final_string = String::new();
 
         loop {
-            match self.next_char()? {
+            match self.next_char() {
                 Some(prev_previous_char) => {
                     match prev_previous_char {
                         '\\' => {
                             // escape chars
-                            match self.next_char()? {
+                            match self.next_char() {
                                 Some(previous_char) => {
                                     match previous_char {
                                         '\\' => {
-                                            ss.push('\\');
+                                            final_string.push('\\');
                                         }
                                         '\'' => {
                                             // single quote does not necessary to be escaped for string
                                             // however, it is still supported for consistency between chars and strings.
-                                            ss.push('\'');
+                                            final_string.push('\'');
                                         }
                                         '"' => {
-                                            ss.push('"');
+                                            final_string.push('"');
                                         }
                                         't' => {
                                             // horizontal tabulation
-                                            ss.push('\t');
+                                            final_string.push('\t');
                                         }
                                         'r' => {
                                             // carriage return (CR, ascii 13)
-                                            ss.push('\r');
+                                            final_string.push('\r');
                                         }
                                         'n' => {
                                             // new line character (line feed, LF, ascii 10)
-                                            ss.push('\n');
+                                            final_string.push('\n');
                                         }
                                         '0' => {
                                             // null char
-                                            ss.push('\0');
+                                            final_string.push('\0');
                                         }
                                         'u' => {
                                             if self.peek_char_and_equals(0, '{') {
                                                 // unicode code point, e.g. '\u{2d}', '\u{6587}'
                                                 let ch = self.unescape_unicode()?;
-                                                ss.push(ch);
+                                                final_string.push(ch);
                                             } else {
-                                                return Err(Error::MessageWithLocation(
+                                                return Err(AsonError::MessageWithLocation(
                                                     "Missing the brace for unicode escape sequence.".to_owned(),
                                                     self.last_position.move_position_forward()
                                                 ));
@@ -1443,7 +1392,7 @@ impl<'a> TokenIter<'a> {
                                         '\r' if self.peek_char_and_equals(0, '\n') => {
                                             // (single line) long string
 
-                                            self.next_char()?; // consume '\n'
+                                            self.next_char(); // consume '\n'
                                             self.consume_all_leading_whitespaces()?;
                                         }
                                         '\n' => {
@@ -1451,7 +1400,7 @@ impl<'a> TokenIter<'a> {
                                             self.consume_all_leading_whitespaces()?;
                                         }
                                         _ => {
-                                            return Err(Error::MessageWithLocation(
+                                            return Err(AsonError::MessageWithLocation(
                                                 format!(
                                                     "Unsupported escape char '{}'.",
                                                     previous_char
@@ -1466,7 +1415,7 @@ impl<'a> TokenIter<'a> {
                                 }
                                 None => {
                                     // `\` + EOF
-                                    return Err(Error::UnexpectedEndOfDocument(
+                                    return Err(AsonError::UnexpectedEndOfDocument(
                                         "Incomplete character escape sequence.".to_owned(),
                                     ));
                                 }
@@ -1478,81 +1427,41 @@ impl<'a> TokenIter<'a> {
                         }
                         _ => {
                             // ordinary char
-                            ss.push(prev_previous_char);
+                            final_string.push(prev_previous_char);
                         }
                     }
                 }
                 None => {
                     // `"...EOF`
-                    return Err(Error::UnexpectedEndOfDocument(
+                    return Err(AsonError::UnexpectedEndOfDocument(
                         "Incomplete string.".to_owned(),
                     ));
                 }
             }
         }
 
-        let ss_range = Location::from_position_pair_with_end_included(
+        let final_string_range = Location::from_position_pair_with_end_included(
             &self.pop_saved_position(),
             &self.last_position,
         );
 
-        Ok(TokenWithRange::new(Token::String(ss), ss_range))
+        Ok(TokenWithRange::new(
+            Token::String(final_string),
+            final_string_range,
+        ))
     }
 
-    //     /// return the amount of leading whitespaces
-    //     fn consume_leading_whitespaces(
-    //         &mut self,
-    //         expect_whitespace_numbers: Option<usize>,
-    //     ) -> Result<usize, Error> {
-    //         // \nssssS  //
-    //         //   ^   ^__// to here ('s' = whitespace, 'S' = not whitespace)
-    //         //   |______// current char, UNVALIDATED
-    //
-    //         let mut count = 0;
-    //
-    //         loop {
-    //             if let Some(max) = expect_whitespace_numbers {
-    //                 if count >= max {
-    //                     break;
-    //                 }
-    //             }
-    //
-    //             match self.peek_char(0)? {
-    //                 Some(current_char) => {
-    //                     match current_char {
-    //                         ' ' | '\t' => {
-    //                             count += 1;
-    //
-    //                             self.next_char()?; // consume ' ' or '\t'
-    //                         }
-    //                         _ => {
-    //                             break;
-    //                         }
-    //                     }
-    //                 }
-    //                 None => {
-    //                     // EOF
-    //                     return Err(Error::UnexpectedEndOfDocument(
-    //                         "Incomplete string.".to_owned(),
-    //                     ));
-    //                 }
-    //             }
-    //         }
-    //
-    //         Ok(count)
-    //     }
-
-    fn consume_all_leading_whitespaces(&mut self) -> Result<(), Error> {
+    fn consume_all_leading_whitespaces(&mut self) -> Result<(), AsonError> {
         // \nssssS  //
         //   ^   ^__// to here ('s' = whitespace, 'S' = not whitespace)
         //   |______// current char, UNVALIDATED
 
         loop {
-            match self.peek_char(0)? {
+            match self.peek_char(0) {
                 Some(current_char) => {
                     match current_char {
                         ' ' | '\t' => {
-                            self.next_char()?; // consume ' ' or '\t'
+                            self.next_char(); // consume ' ' or '\t'
                         }
                         _ => {
                             break;
@@ -1561,7 +1470,7 @@ impl<'a> TokenIter<'a> {
                 }
                 None => {
                     // EOF
-                    return Err(Error::UnexpectedEndOfDocument(
+                    return Err(AsonError::UnexpectedEndOfDocument(
                         "Incomplete string.".to_owned(),
                     ));
                 }
@@ -1571,7 +1480,7 @@ impl<'a> TokenIter<'a> {
         Ok(())
     }
 
-    fn lex_raw_string(&mut self) -> Result<TokenWithRange, Error> {
+    fn lex_raw_string(&mut self) -> Result<TokenWithRange, AsonError> {
         // r"abc"?  //
         // ^^    ^__// to here
         // ||_______// validated
@@ -1579,13 +1488,13 @@ impl<'a> TokenIter<'a> {
 
         self.push_peek_position();
 
-        self.next_char()?; // consume char 'r'
-        self.next_char()?; // consume the '"'
+        self.next_char(); // consume char 'r'
+        self.next_char(); // consume the '"'
 
-        let mut ss = String::new();
+        let mut final_string = String::new();
 
         loop {
-            match self.next_char()? {
+            match self.next_char() {
                 Some(previous_char) => {
                     match previous_char {
                         '"' => {
@@ -1594,28 +1503,31 @@ impl<'a> TokenIter<'a> {
                         }
                         _ => {
                             // ordinary char
-                            ss.push(previous_char);
+                            final_string.push(previous_char);
                         }
                     }
                 }
                 None => {
                     // `r"...EOF`
-                    return Err(Error::UnexpectedEndOfDocument(
+                    return Err(AsonError::UnexpectedEndOfDocument(
                         "Incomplete string.".to_owned(),
                     ));
                 }
             }
         }
 
-        let ss_range = Location::from_position_pair_with_end_included(
+        let final_string_range = Location::from_position_pair_with_end_included(
             &self.pop_saved_position(),
             &self.last_position,
         );
 
-        Ok(TokenWithRange::new(Token::String(ss), ss_range))
+        Ok(TokenWithRange::new(
+            Token::String(final_string),
+            final_string_range,
+        ))
     }
 
-    fn lex_raw_string_with_hash_symbol(&mut self) -> Result<TokenWithRange, Error> {
+    fn lex_raw_string_with_hash_symbol(&mut self) -> Result<TokenWithRange, AsonError> {
         // r#"abc"#?  //
         // ^^^     ^__// to here
         // |||________// validated
@@ -1626,45 +1538,48 @@ impl<'a> TokenIter<'a> {
 
         self.push_peek_position();
 
-        self.next_char()?; // consume 'r'
-        self.next_char()?; // consume '#'
-        self.next_char()?; // consume '"'
+        self.next_char(); // consume 'r'
+        self.next_char(); // consume '#'
+        self.next_char(); // consume '"'
 
-        let mut ss = String::new();
+        let mut final_string = String::new();
 
         loop {
-            match self.next_char()? {
+            match self.next_char() {
                 Some(previous_char) => {
                     match previous_char {
                         '"' if self.peek_char_and_equals(0, '#') => {
                             // it is the end of the string
-                            self.next_char()?; // consume '#'
+                            self.next_char(); // consume '#'
                             break;
                         }
                         _ => {
                             // ordinary char
-                            ss.push(previous_char);
+                            final_string.push(previous_char);
                         }
                     }
                 }
                 None => {
                     // `r#"...EOF`
-                    return Err(Error::UnexpectedEndOfDocument(
+                    return Err(AsonError::UnexpectedEndOfDocument(
                         "Incomplete string.".to_owned(),
                     ));
                 }
             }
         }
 
-        let ss_range = Location::from_position_pair_with_end_included(
+        let final_string_range = Location::from_position_pair_with_end_included(
             &self.pop_saved_position(),
             &self.last_position,
         );
 
-        Ok(TokenWithRange::new(Token::String(ss), ss_range))
+        Ok(TokenWithRange::new(
+            Token::String(final_string),
+            final_string_range,
+        ))
     }
 
-    fn lex_auto_trimmed_string(&mut self) -> Result<TokenWithRange, Error> {
+    fn lex_auto_trimmed_string(&mut self) -> Result<TokenWithRange, AsonError> {
         // """\n                    //
         // ^^^  auto-trimmed string //
         // |||  ...\n               //
@@ -1680,17 +1595,17 @@ impl<'a> TokenIter<'a> {
 
         self.push_peek_position();
 
-        self.next_char()?; // consume the 1st '"'
-        self.next_char()?; // consume the 2nd '"'
-        self.next_char()?; // consume the 3rd '"'
+        self.next_char(); // consume the 1st '"'
+        self.next_char(); // consume the 2nd '"'
+        self.next_char(); // consume the 3rd '"'
 
         if self.peek_char_and_equals(0, '\n') {
-            self.next_char()?; // consume '\n'
+            self.next_char(); // consume '\n'
         } else if self.peek_char_and_equals(0, '\r') && self.peek_char_and_equals(1, '\n') {
-            self.next_char()?; // consume '\r'
-            self.next_char()?; // consume '\n'
+            self.next_char(); // consume '\r'
+            self.next_char(); // consume '\n'
         } else {
-            return Err(Error::MessageWithLocation(
+            return Err(AsonError::MessageWithLocation(
                 "The content of auto-trimmed string should start on a new line.".to_owned(),
                 self.last_position.move_position_forward(),
             ));
@@ -1700,7 +1615,7 @@ impl<'a> TokenIter<'a> {
         let mut current_line = vec![]; //String::new();
 
         loop {
-            match self.next_char()? {
+            match self.next_char() {
                 Some(previous_char) => {
                     match previous_char {
                         '\n' => {
@@ -1710,7 +1625,7 @@ impl<'a> TokenIter<'a> {
                             current_line = vec![];
                         }
                         '\r' if self.peek_char_and_equals(0, '\n') => {
-                            self.next_char()?; // consume '\n'
+                            self.next_char(); // consume '\n'
 
                             current_line.push('\r');
                             current_line.push('\n');
@@ -1723,8 +1638,8 @@ impl<'a> TokenIter<'a> {
                             && self.peek_char_and_equals(1, '"') =>
                         {
                             // it is the end of string
-                            self.next_char()?; // consume '"'
-                            self.next_char()?; // consume '"'
+                            self.next_char(); // consume '"'
+                            self.next_char(); // consume '"'
                             break;
                         }
                         _ => {
@@ -1735,7 +1650,7 @@ impl<'a> TokenIter<'a> {
                 }
                 None => {
                     // `"""\n...EOF`
-                    return Err(Error::UnexpectedEndOfDocument(
+                    return Err(AsonError::UnexpectedEndOfDocument(
                         "Incomplete string.".to_owned(),
                     ));
                 }
@@ -1806,7 +1721,7 @@ impl<'a> TokenIter<'a> {
         Ok(TokenWithRange::new(Token::String(content), range))
     }
 
-    fn lex_datetime(&mut self) -> Result<TokenWithRange, Error> {
+    fn lex_datetime(&mut self) -> Result<TokenWithRange, AsonError> {
         // d"2024-03-16T16:30:50+08:00"?  //
         // ^^                          ^__// to here
         // ||_____________________________// validated
@@ -1814,13 +1729,13 @@ impl<'a> TokenIter<'a> {
 
         self.push_peek_position();
 
-        self.next_char()?; // consume the char 'd'
-        self.next_char()?; // consume left quote
+        self.next_char(); // consume the char 'd'
+        self.next_char(); // consume left quote
 
         let mut date_string = String::new();
 
         loop {
-            match self.next_char()? {
+            match self.next_char() {
                 Some(previous_char) => {
                     match previous_char {
                         '"' => {
@@ -1832,7 +1747,7 @@ impl<'a> TokenIter<'a> {
                             date_string.push(previous_char);
                         }
                         _ => {
-                            return Err(Error::MessageWithLocation(
+                            return Err(AsonError::MessageWithLocation(
                                 format!("Invalid char '{}' for datetime.", previous_char),
                                 self.last_position,
                             ));
@@ -1841,7 +1756,7 @@ impl<'a> TokenIter<'a> {
                 }
                 None => {
                     // d"...EOF
-                    return Err(Error::UnexpectedEndOfDocument(
+                    return Err(AsonError::UnexpectedEndOfDocument(
                         "Incomplete date time.".to_owned(),
                     ));
                 }
@@ -1866,7 +1781,7 @@ impl<'a> TokenIter<'a> {
             // YYYY-MM-DDTHH:mm:ssZ
             // YYYY-MM-DDTHH:mm:ss+08:00
         } else {
-            return Err(Error::MessageWithLocation(
+            return Err(AsonError::MessageWithLocation(
                 format!(
                     "Invalid date time string: {}, the required format is: \"YYYY-MM-DD HH:mm:ss\"",
                     date_string
@@ -1876,7 +1791,7 @@ impl<'a> TokenIter<'a> {
         }
 
         let rfc3339 = DateTime::parse_from_rfc3339(&date_string).map_err(|_| {
-            Error::MessageWithLocation(
+            AsonError::MessageWithLocation(
                 format!(
                     "Can not convert the string \"{}\" to datetime.",
                     date_string
@@ -1888,41 +1803,41 @@ impl<'a> TokenIter<'a> {
         Ok(TokenWithRange::new(Token::Date(rfc3339), date_range))
     }
 
-    fn lex_byte_data_hexadecimal(&mut self) -> Result<TokenWithRange, Error> {
+    fn lex_hexadecimal_byte_data(&mut self) -> Result<TokenWithRange, AsonError> {
         // h"00 11 aa bb"?  //
         // ^^            ^__// to here
         // ||_______________// validated
         // |________________// current char, validated
 
-        let consume_zero_or_more_whitespaces = |iter: &mut TokenIter| -> Result<usize, Error> {
+        let consume_zero_or_more_whitespaces = |iter: &mut Lexer| -> Result<usize, AsonError> {
             // exit when encounting non-whitespaces or EOF
             let mut amount: usize = 0;
 
-            while let Some(' ' | '\t' | '\r' | '\n') = iter.peek_char(0)? {
+            while let Some(' ' | '\t' | '\r' | '\n') = iter.peek_char(0) {
                 amount += 1;
-                iter.next_char()?;
+                iter.next_char();
             }
 
             Ok(amount)
         };
 
-        let consume_one_or_more_whitespaces = |iter: &mut TokenIter| -> Result<usize, Error> {
+        let consume_one_or_more_whitespaces = |iter: &mut Lexer| -> Result<usize, AsonError> {
             let mut amount: usize = 0;
 
             loop {
-                match iter.peek_char(0)? {
+                match iter.peek_char(0) {
                     Some(current_char) => {
                         match current_char {
                             ' ' | '\t' | '\r' | '\n' => {
                                 // consume whitespace
-                                iter.next_char()?;
+                                iter.next_char();
                                 amount += 1;
                             }
                             _ => {
                                 if amount > 0 {
                                     break;
                                 } else {
-                                    return Err(Error::MessageWithLocation(
+                                    return Err(AsonError::MessageWithLocation(
                                         "Expect a whitespace between the hexadecimal byte data digits."
                                             .to_owned(),
                                         iter.last_position.move_position_forward()
@@ -1933,7 +1848,7 @@ impl<'a> TokenIter<'a> {
                     }
                     None => {
                         // h"...EOF
-                        return Err(Error::UnexpectedEndOfDocument(
+                        return Err(AsonError::UnexpectedEndOfDocument(
                             "Incomplete hexadecimal byte data.".to_owned(),
                         ));
                     }
@@ -1945,8 +1860,8 @@ impl<'a> TokenIter<'a> {
 
         self.push_peek_position();
 
-        self.next_char()?; // consume char 'h'
-        self.next_char()?; // consume quote '"'
+        self.next_char(); // consume char 'h'
+        self.next_char(); // consume quote '"'
 
         let mut bytes: Vec<u8> = Vec::new();
         let mut chars: [char; 2] = ['0', '0'];
@@ -1959,13 +1874,13 @@ impl<'a> TokenIter<'a> {
             }
 
             for c in &mut chars {
-                match self.next_char()? {
+                match self.next_char() {
                     Some(previous_char) => match previous_char {
                         'a'..='f' | 'A'..='F' | '0'..='9' => {
                             *c = previous_char;
                         }
                         _ => {
-                            return Err(Error::MessageWithLocation(
+                            return Err(AsonError::MessageWithLocation(
                                 format!(
                                     "Invalid digit '{}' for hexadecimal byte data.",
                                     previous_char
@@ -1975,7 +1890,7 @@ impl<'a> TokenIter<'a> {
                         }
                     },
                     None => {
-                        return Err(Error::UnexpectedEndOfDocument(
+                        return Err(AsonError::UnexpectedEndOfDocument(
                             "Incomplete hexadecimal byte data.".to_owned(),
                         ))
                     }
@@ -1994,17 +1909,17 @@ impl<'a> TokenIter<'a> {
             consume_one_or_more_whitespaces(self)?;
         }
 
-        self.next_char()?; // consume '"'
+        self.next_char(); // consume '"'
 
         let bytes_range = Location::from_position_pair_with_end_included(
             &self.pop_saved_position(),
             &self.last_position,
         );
 
-        Ok(TokenWithRange::new(Token::ByteData(bytes), bytes_range))
+        Ok(TokenWithRange::new(Token::HexByteData(bytes), bytes_range))
     }
 
-    fn lex_line_comment(&mut self) -> Result<TokenWithRange, Error> {
+    fn lex_line_comment(&mut self) -> Result<TokenWithRange, AsonError> {
         // xx...[\r]\n?  //
         // ^^         ^__// to here ('?' = any char or EOF)
         // ||____________// validated
@@ -2014,12 +1929,12 @@ impl<'a> TokenIter<'a> {
 
         self.push_peek_position();
 
-        self.next_char()?; // consume the 1st '/'
-        self.next_char()?; // consume the 2nd '/'
+        self.next_char(); // consume the 1st '/'
+        self.next_char(); // consume the 2nd '/'
 
         let mut comment_string = String::new();
 
-        while let Some(current_char) = self.peek_char(0)? {
+        while let Some(current_char) = self.peek_char(0) {
             // ignore all chars except '\n' or '\r\n'
             // note that the "line comment token" does not include the trailing new line chars (\n or \r\n),
 
@@ -2033,7 +1948,7 @@ impl<'a> TokenIter<'a> {
                 _ => {
                     comment_string.push(*current_char);
 
-                    self.next_char()?; // consume char
+                    self.next_char(); // consume char
                 }
             }
         }
@@ -2049,7 +1964,7 @@ impl<'a> TokenIter<'a> {
         ))
     }
 
-    fn lex_block_comment(&mut self) -> Result<TokenWithRange, Error> {
+    fn lex_block_comment(&mut self) -> Result<TokenWithRange, AsonError> {
         // /*...*/?  //
         // ^^     ^__// to here
         // ||________// validated
@@ -2057,27 +1972,27 @@ impl<'a> TokenIter<'a> {
 
         self.push_peek_position();
 
-        self.next_char()?; // consume '/'
-        self.next_char()?; // consume '*'
+        self.next_char(); // consume '/'
+        self.next_char(); // consume '*'
 
         let mut comment_string = String::new();
         let mut depth = 1;
 
         loop {
-            match self.next_char()? {
+            match self.next_char() {
                 Some(previous_char) => {
                     match previous_char {
                         '/' if self.peek_char_and_equals(0, '*') => {
                             // nested block comment
                             comment_string.push_str("/*");
 
-                            self.next_char()?; // consume '*'
+                            self.next_char(); // consume '*'
 
                             // increase depth
                             depth += 1;
                         }
                         '*' if self.peek_char_and_equals(0, '/') => {
-                            self.next_char()?; // consume '/'
+                            self.next_char(); // consume '/'
 
                             // decrease depth
                             depth -= 1;
@@ -2103,7 +2018,7 @@ impl<'a> TokenIter<'a> {
                         "Incomplete block comment.".to_owned()
                     };
 
-                    return Err(Error::UnexpectedEndOfDocument(msg));
+                    return Err(AsonError::UnexpectedEndOfDocument(msg));
                 }
             }
         }
@@ -2126,40 +2041,53 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use crate::{
-        charposition::CharsWithPositionIter,
-        charstream::CharStreamFromCharIter,
-        error::Error,
+        charwithposition::CharsWithPositionIter,
+        // charstream::CharStreamFromCharIter,
         lexer::{Comment, NumberToken, TokenWithRange},
         location::Location,
         peekableiter::PeekableIter,
+        AsonError,
     };
 
-    use super::{Token, TokenIter, LEXER_PEEK_CHAR_MAX_COUNT};
+    use super::{Lexer, Token, LEXER_PEEK_CHAR_MAX_COUNT};
 
-    fn lex_str_to_vec_with_range(s: &str) -> Result<Vec<TokenWithRange>, Error> {
+    impl Token {
+        pub fn new_variant(type_name: &str, member_name: &str) -> Self {
+            Token::Variant(type_name.to_owned(), member_name.to_owned())
+        }
+
+        pub fn new_identifier(s: &str) -> Self {
+            Token::Identifier(s.to_owned())
+        }
+
+        pub fn new_string(s: &str) -> Self {
+            Token::String(s.to_owned())
+        }
+    }
+
+    fn lex_from_str(s: &str) -> Result<Vec<TokenWithRange>, AsonError> {
         let mut chars = s.chars();
-        let mut char_stream = CharStreamFromCharIter::new(&mut chars);
-        let mut position_iter = CharsWithPositionIter::new(0, &mut char_stream);
-        let mut peekable_position_iter =
-            PeekableIter::new(&mut position_iter, LEXER_PEEK_CHAR_MAX_COUNT);
-        let token_iter = TokenIter::new(&mut peekable_position_iter);
+        let mut char_position_iter = CharsWithPositionIter::new(&mut chars);
+        let mut peekable_char_position_iter =
+            PeekableIter::new(&mut char_position_iter, LEXER_PEEK_CHAR_MAX_COUNT);
+        let lexer = Lexer::new(&mut peekable_char_position_iter);
 
-        // do not use `iter.collect::<Vec<_>>()` because the `TokenIter` throws
+        // do not use `iter.collect::<Vec<_>>()` because the `Lexer` throws
         // exceptions though the function `next() -> Option<Result<...>>`,
         // the iterator wouldn't stop even if it encounters an error.
-        let mut ts = vec![];
-        for r in token_iter {
-            match r {
-                Ok(r) => ts.push(r),
+        let mut token_with_ranges = vec![];
+        for result in lexer {
+            match result {
+                Ok(twr) => token_with_ranges.push(twr),
                 Err(e) => return Err(e),
             }
         }
 
-        Ok(ts)
+        Ok(token_with_ranges)
     }
 
-    fn lex_str_to_vec(s: &str) -> Result<Vec<Token>, Error> {
-        let tokens = lex_str_to_vec_with_range(s)?
+    fn lex_from_str_without_location(s: &str) -> Result<Vec<Token>, AsonError> {
+        let tokens = lex_from_str(s)?
             .into_iter()
             .map(|e| e.token)
             .collect::<Vec<Token>>();
@@ -2168,20 +2096,20 @@ mod tests {
 
     #[test]
     fn test_lex_whitespaces() {
-        assert_eq!(lex_str_to_vec("  ").unwrap(), vec![]);
+        assert_eq!(lex_from_str_without_location("  ").unwrap(), vec![]);
 
         assert_eq!(
-            lex_str_to_vec("()").unwrap(),
+            lex_from_str_without_location("()").unwrap(),
             vec![Token::LeftParen, Token::RightParen]
         );
 
         assert_eq!(
-            lex_str_to_vec("(  )").unwrap(),
+            lex_from_str_without_location("(  )").unwrap(),
             vec![Token::LeftParen, Token::RightParen]
         );
 
         assert_eq!(
-            lex_str_to_vec("(\t\r\n\n\n)").unwrap(),
+            lex_from_str_without_location("(\t\r\n\n\n)").unwrap(),
             vec![
                 Token::LeftParen,
                 Token::NewLine,
@@ -2193,21 +2121,21 @@ mod tests {
 
         // location
 
-        assert_eq!(lex_str_to_vec_with_range("  ").unwrap(), vec![]);
+        assert_eq!(lex_from_str("  ").unwrap(), vec![]);
 
         assert_eq!(
-            lex_str_to_vec_with_range("()").unwrap(),
+            lex_from_str("()").unwrap(),
             vec![
-                TokenWithRange::new(Token::LeftParen, Location::new_range(0, 0, 0, 0, 1)),
-                TokenWithRange::new(Token::RightParen, Location::new_range(0, 1, 0, 1, 1)),
+                TokenWithRange::new(Token::LeftParen, Location::new_range(/*0,*/ 0, 0, 0, 1)),
+                TokenWithRange::new(Token::RightParen, Location::new_range(/*0,*/ 1, 0, 1, 1)),
             ]
         );
 
         assert_eq!(
-            lex_str_to_vec_with_range("(  )").unwrap(),
+            lex_from_str("(  )").unwrap(),
             vec![
-                TokenWithRange::new(Token::LeftParen, Location::new_range(0, 0, 0, 0, 1)),
-                TokenWithRange::new(Token::RightParen, Location::new_range(0, 3, 0, 3, 1)),
+                TokenWithRange::new(Token::LeftParen, Location::new_range(/*0,*/ 0, 0, 0, 1)),
+                TokenWithRange::new(Token::RightParen, Location::new_range(/*0,*/ 3, 0, 3, 1)),
             ]
         );
 
@@ -2219,13 +2147,13 @@ mod tests {
         //  1  2   1 1 1    // length
 
         assert_eq!(
-            lex_str_to_vec_with_range("(\t\r\n\n\n)").unwrap(),
+            lex_from_str("(\t\r\n\n\n)").unwrap(),
             vec![
-                TokenWithRange::new(Token::LeftParen, Location::new_range(0, 0, 0, 0, 1)),
-                TokenWithRange::new(Token::NewLine, Location::new_range(0, 2, 0, 2, 2,)),
-                TokenWithRange::new(Token::NewLine, Location::new_range(0, 4, 1, 0, 1,)),
-                TokenWithRange::new(Token::NewLine, Location::new_range(0, 5, 2, 0, 1,)),
-                TokenWithRange::new(Token::RightParen, Location::new_range(0, 6, 3, 0, 1)),
+                TokenWithRange::new(Token::LeftParen, Location::new_range(/*0,*/ 0, 0, 0, 1)),
+                TokenWithRange::new(Token::NewLine, Location::new_range(/*0,*/ 2, 0, 2, 2,)),
+                TokenWithRange::new(Token::NewLine, Location::new_range(/*0,*/ 4, 1, 0, 1,)),
+                TokenWithRange::new(Token::NewLine, Location::new_range(/*0,*/ 5, 2, 0, 1,)),
+                TokenWithRange::new(Token::RightParen, Location::new_range(/*0,*/ 6, 3, 0, 1)),
             ]
         );
     }
@@ -2233,7 +2161,7 @@ mod tests {
     #[test]
     fn test_lex_punctuations() {
         assert_eq!(
-            lex_str_to_vec(",:{}[]()+-").unwrap(),
+            lex_from_str_without_location(",:{}[]()+-").unwrap(),
             vec![
                 Token::Comma,
                 Token::Colon,
@@ -2252,12 +2180,12 @@ mod tests {
     #[test]
     fn test_lex_identifier() {
         assert_eq!(
-            lex_str_to_vec("name").unwrap(),
+            lex_from_str_without_location("name").unwrap(),
             vec![Token::new_identifier("name")]
         );
 
         assert_eq!(
-            lex_str_to_vec("(name)").unwrap(),
+            lex_from_str_without_location("(name)").unwrap(),
             vec![
                 Token::LeftParen,
                 Token::new_identifier("name"),
@@ -2266,7 +2194,7 @@ mod tests {
         );
 
         assert_eq!(
-            lex_str_to_vec("( a )").unwrap(),
+            lex_from_str_without_location("( a )").unwrap(),
             vec![
                 Token::LeftParen,
                 Token::new_identifier("a"),
@@ -2275,17 +2203,17 @@ mod tests {
         );
 
         assert_eq!(
-            lex_str_to_vec("a__b__c").unwrap(),
+            lex_from_str_without_location("a__b__c").unwrap(),
             vec![Token::new_identifier("a__b__c")]
         );
 
         assert_eq!(
-            lex_str_to_vec("foo bar").unwrap(),
+            lex_from_str_without_location("foo bar").unwrap(),
             vec![Token::new_identifier("foo"), Token::new_identifier("bar")]
         );
 
         assert_eq!(
-            lex_str_to_vec("αβγ 文字 🍞🥛").unwrap(),
+            lex_from_str_without_location("αβγ 文字 🍞🥛").unwrap(),
             vec![
                 Token::new_identifier("αβγ"),
                 Token::new_identifier("文字"),
@@ -2296,16 +2224,16 @@ mod tests {
         // location
 
         assert_eq!(
-            lex_str_to_vec_with_range("hello ASON").unwrap(),
+            lex_from_str("hello ASON").unwrap(),
             vec![
                 TokenWithRange::from_position_and_length(
                     Token::new_identifier("hello"),
-                    &Location::new_position(0, 0, 0, 0),
+                    &Location::new_position(/*0,*/ 0, 0, 0),
                     5
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::new_identifier("ASON"),
-                    &Location::new_position(0, 6, 0, 6),
+                    &Location::new_position(/*0,*/ 6, 0, 6),
                     4
                 )
             ]
@@ -2313,11 +2241,11 @@ mod tests {
 
         // err: invalid char
         assert!(matches!(
-            lex_str_to_vec("abc&xyz"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("abc&xyz"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 3,
                     line: 0,
                     column: 3,
@@ -2329,20 +2257,23 @@ mod tests {
 
     #[test]
     fn test_lex_keyword() {
-        assert_eq!(lex_str_to_vec("true").unwrap(), vec![Token::Boolean(true)]);
+        assert_eq!(
+            lex_from_str_without_location("true").unwrap(),
+            vec![Token::Boolean(true)]
+        );
 
         assert_eq!(
-            lex_str_to_vec("false").unwrap(),
+            lex_from_str_without_location("false").unwrap(),
             vec![Token::Boolean(false)]
         );
 
         assert_eq!(
-            lex_str_to_vec("true false").unwrap(),
+            lex_from_str_without_location("true false").unwrap(),
             vec![Token::Boolean(true), Token::Boolean(false)]
         );
 
         assert_eq!(
-            lex_str_to_vec("Inf Inf_f32 Inf_f64").unwrap(),
+            lex_from_str_without_location("Inf Inf_f32 Inf_f64").unwrap(),
             vec![
                 Token::Number(NumberToken::F64(f64::INFINITY)),
                 Token::Number(NumberToken::F32(f32::INFINITY)),
@@ -2350,23 +2281,24 @@ mod tests {
             ]
         );
 
-        let nans = lex_str_to_vec("NaN NaN_f32 NaN_f64").unwrap();
+        let nans = lex_from_str_without_location("NaN NaN_f32 NaN_f64").unwrap();
         assert!(matches!(nans[0], Token::Number(NumberToken::F64(v)) if v.is_nan()));
         assert!(matches!(nans[1], Token::Number(NumberToken::F32(v)) if v.is_nan()));
         assert!(matches!(nans[2], Token::Number(NumberToken::F64(v)) if v.is_nan()));
 
         assert_eq!(
-            lex_str_to_vec("Inf_i32").unwrap(),
+            lex_from_str_without_location("Inf_i32").unwrap(),
             vec![Token::new_identifier("Inf_i32")]
         );
 
         assert_eq!(
-            lex_str_to_vec("NaN_i32").unwrap(),
+            lex_from_str_without_location("NaN_i32").unwrap(),
             vec![Token::new_identifier("NaN_i32")]
         );
+    }
 
-        // location
-
+    #[test]
+    fn test_lex_multiline_location() {
         // "[\n    true\n    false\n]"
         //  01 234567890 1234567890 1   // index
         //  00 111111111 2222222222 3   // line
@@ -2374,41 +2306,41 @@ mod tests {
         //  11     4   1     5    1 1   // length
 
         assert_eq!(
-            lex_str_to_vec_with_range("[\n    true\n    false\n]").unwrap(),
+            lex_from_str("[\n    true\n    false\n]").unwrap(),
             vec![
                 TokenWithRange::from_position_and_length(
                     Token::LeftBracket,
-                    &Location::new_position(0, 0, 0, 0),
+                    &Location::new_position(/*0,*/ 0, 0, 0),
                     1
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::NewLine,
-                    &Location::new_position(0, 1, 0, 1),
+                    &Location::new_position(/*0,*/ 1, 0, 1),
                     1
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::Boolean(true),
-                    &Location::new_position(0, 6, 1, 4),
+                    &Location::new_position(/*0,*/ 6, 1, 4),
                     4
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::NewLine,
-                    &Location::new_position(0, 10, 1, 8),
+                    &Location::new_position(/*0,*/ 10, 1, 8),
                     1
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::Boolean(false),
-                    &Location::new_position(0, 15, 2, 4),
+                    &Location::new_position(/*0,*/ 15, 2, 4),
                     5
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::NewLine,
-                    &Location::new_position(0, 20, 2, 9),
+                    &Location::new_position(/*0,*/ 20, 2, 9),
                     1
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::RightBracket,
-                    &Location::new_position(0, 21, 3, 0),
+                    &Location::new_position(/*0,*/ 21, 3, 0),
                     1
                 ),
             ]
@@ -2418,7 +2350,7 @@ mod tests {
     #[test]
     fn test_lex_decimal_number() {
         assert_eq!(
-            lex_str_to_vec("(211)").unwrap(),
+            lex_from_str_without_location("(211)").unwrap(),
             vec![
                 Token::LeftParen,
                 Token::Number(NumberToken::I32(211)),
@@ -2427,27 +2359,27 @@ mod tests {
         );
 
         assert_eq!(
-            lex_str_to_vec("211").unwrap(),
+            lex_from_str_without_location("211").unwrap(),
             vec![Token::Number(NumberToken::I32(211))]
         );
 
         assert_eq!(
-            lex_str_to_vec("-2017").unwrap(),
+            lex_from_str_without_location("-2017").unwrap(),
             vec![Token::Minus, Token::Number(NumberToken::I32(2017))]
         );
 
         assert_eq!(
-            lex_str_to_vec("+2024").unwrap(),
+            lex_from_str_without_location("+2024").unwrap(),
             vec![Token::Plus, Token::Number(NumberToken::I32(2024))]
         );
 
         assert_eq!(
-            lex_str_to_vec("223_211").unwrap(),
+            lex_from_str_without_location("223_211").unwrap(),
             vec![Token::Number(NumberToken::I32(223_211))]
         );
 
         assert_eq!(
-            lex_str_to_vec("223 211").unwrap(),
+            lex_from_str_without_location("223 211").unwrap(),
             vec![
                 Token::Number(NumberToken::I32(223)),
                 Token::Number(NumberToken::I32(211)),
@@ -2457,16 +2389,16 @@ mod tests {
         // location
 
         assert_eq!(
-            lex_str_to_vec_with_range("223 211").unwrap(),
+            lex_from_str("223 211").unwrap(),
             vec![
                 TokenWithRange::from_position_and_length(
                     Token::Number(NumberToken::I32(223)),
-                    &Location::new_position(0, 0, 0, 0,),
+                    &Location::new_position(/*0,*/ 0, 0, 0,),
                     3
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::Number(NumberToken::I32(211)),
-                    &Location::new_position(0, 4, 0, 4,),
+                    &Location::new_position(/*0,*/ 4, 0, 4,),
                     3
                 ),
             ]
@@ -2474,11 +2406,11 @@ mod tests {
 
         // err: invalid char for decimal number
         assert!(matches!(
-            lex_str_to_vec("12x34"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("12x34"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 2,
                     line: 0,
                     column: 2,
@@ -2489,11 +2421,11 @@ mod tests {
 
         // err: integer number overflow
         assert!(matches!(
-            lex_str_to_vec("4_294_967_296"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("4_294_967_296"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 0,
                     line: 0,
                     column: 0,
@@ -2507,42 +2439,42 @@ mod tests {
     #[test]
     fn test_lex_decimal_number_floating_point() {
         assert_eq!(
-            lex_str_to_vec("3.14").unwrap(),
+            lex_from_str_without_location("3.14").unwrap(),
             vec![Token::Number(NumberToken::F64(3.14))]
         );
 
         assert_eq!(
-            lex_str_to_vec("+1.414").unwrap(),
+            lex_from_str_without_location("+1.414").unwrap(),
             vec![Token::Plus, Token::Number(NumberToken::F64(1.414))]
         );
 
         assert_eq!(
-            lex_str_to_vec("-2.718").unwrap(),
+            lex_from_str_without_location("-2.718").unwrap(),
             vec![Token::Minus, Token::Number(NumberToken::F64(2.718))]
         );
 
         assert_eq!(
-            lex_str_to_vec("2.998e8").unwrap(),
+            lex_from_str_without_location("2.998e8").unwrap(),
             vec![Token::Number(NumberToken::F64(2.998e8))]
         );
 
         assert_eq!(
-            lex_str_to_vec("2.998e+8").unwrap(),
+            lex_from_str_without_location("2.998e+8").unwrap(),
             vec![Token::Number(NumberToken::F64(2.998e+8))]
         );
 
         assert_eq!(
-            lex_str_to_vec("6.626e-34").unwrap(),
+            lex_from_str_without_location("6.626e-34").unwrap(),
             vec![Token::Number(NumberToken::F64(6.626e-34))]
         );
 
         // err: incomplete floating point number since ends with '.'
         assert!(matches!(
-            lex_str_to_vec("123."),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("123."),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 3,
                     line: 0,
                     column: 3,
@@ -2553,11 +2485,11 @@ mod tests {
 
         // err: incomplete floating point number since ends with 'e'
         assert!(matches!(
-            lex_str_to_vec("123e"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("123e"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 3,
                     line: 0,
                     column: 3,
@@ -2568,11 +2500,11 @@ mod tests {
 
         // err: multiple '.' (point)
         assert!(matches!(
-            lex_str_to_vec("1.23.456"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("1.23.456"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 4,
                     line: 0,
                     column: 4,
@@ -2583,11 +2515,11 @@ mod tests {
 
         // err: multiple 'e' (exponent)
         assert!(matches!(
-            lex_str_to_vec("1e23e456"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("1e23e456"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 4,
                     line: 0,
                     column: 4,
@@ -2598,11 +2530,11 @@ mod tests {
 
         // err: unsupports start with dot
         assert!(matches!(
-            lex_str_to_vec(".123"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location(".123"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 0,
                     line: 0,
                     column: 0,
@@ -2617,17 +2549,17 @@ mod tests {
         // general
         {
             assert_eq!(
-                lex_str_to_vec("11i8").unwrap(),
+                lex_from_str_without_location("11i8").unwrap(),
                 vec![Token::Number(NumberToken::I8(11))]
             );
 
             assert_eq!(
-                lex_str_to_vec("11_i8").unwrap(),
+                lex_from_str_without_location("11_i8").unwrap(),
                 vec![Token::Number(NumberToken::I8(11))]
             );
 
             assert_eq!(
-                lex_str_to_vec("11__i8").unwrap(),
+                lex_from_str_without_location("11__i8").unwrap(),
                 vec![Token::Number(NumberToken::I8(11))]
             );
 
@@ -2636,16 +2568,16 @@ mod tests {
             // "101_i16 103_u32"
             //  012345678901234  // index
             assert_eq!(
-                lex_str_to_vec_with_range("101_i16 103_u32").unwrap(),
+                lex_from_str("101_i16 103_u32").unwrap(),
                 vec![
                     TokenWithRange::from_position_and_length(
                         Token::Number(NumberToken::I16(101)),
-                        &Location::new_position(0, 0, 0, 0),
+                        &Location::new_position(/*0,*/ 0, 0, 0),
                         7
                     ),
                     TokenWithRange::from_position_and_length(
                         Token::Number(NumberToken::U32(103)),
-                        &Location::new_position(0, 8, 0, 8),
+                        &Location::new_position(/*0,*/ 8, 0, 8),
                         7
                     ),
                 ]
@@ -2655,22 +2587,22 @@ mod tests {
         // byte
         {
             assert_eq!(
-                lex_str_to_vec("127_i8").unwrap(),
+                lex_from_str_without_location("127_i8").unwrap(),
                 vec![Token::Number(NumberToken::I8(127))]
             );
 
             assert_eq!(
-                lex_str_to_vec("255_u8").unwrap(),
+                lex_from_str_without_location("255_u8").unwrap(),
                 vec![Token::Number(NumberToken::U8(255))]
             );
 
             // err: unsigned overflow
             assert!(matches!(
-                lex_str_to_vec("256_u8"),
-                Err(Error::MessageWithLocation(
+                lex_from_str_without_location("256_u8"),
+                Err(AsonError::MessageWithLocation(
                     _,
                     Location {
-                        unit: 0,
+                        // unit: 0,
                         index: 0,
                         line: 0,
                         column: 0,
@@ -2683,22 +2615,22 @@ mod tests {
         // short
         {
             assert_eq!(
-                lex_str_to_vec("32767_i16").unwrap(),
+                lex_from_str_without_location("32767_i16").unwrap(),
                 vec![Token::Number(NumberToken::I16(32767))]
             );
 
             assert_eq!(
-                lex_str_to_vec("65535_u16").unwrap(),
+                lex_from_str_without_location("65535_u16").unwrap(),
                 vec![Token::Number(NumberToken::U16(65535))]
             );
 
             // err: unsigned overflow
             assert!(matches!(
-                lex_str_to_vec("65536_u16"),
-                Err(Error::MessageWithLocation(
+                lex_from_str_without_location("65536_u16"),
+                Err(AsonError::MessageWithLocation(
                     _,
                     Location {
-                        unit: 0,
+                        // unit: 0,
                         index: 0,
                         line: 0,
                         column: 0,
@@ -2711,22 +2643,22 @@ mod tests {
         // int
         {
             assert_eq!(
-                lex_str_to_vec("2_147_483_647_i32").unwrap(),
+                lex_from_str_without_location("2_147_483_647_i32").unwrap(),
                 vec![Token::Number(NumberToken::I32(2_147_483_647i32 as u32))]
             );
 
             assert_eq!(
-                lex_str_to_vec("4_294_967_295_u32").unwrap(),
+                lex_from_str_without_location("4_294_967_295_u32").unwrap(),
                 vec![Token::Number(NumberToken::U32(u32::MAX))]
             );
 
             // err: unsigned overflow
             assert!(matches!(
-                lex_str_to_vec("4_294_967_296_u32"),
-                Err(Error::MessageWithLocation(
+                lex_from_str_without_location("4_294_967_296_u32"),
+                Err(AsonError::MessageWithLocation(
                     _,
                     Location {
-                        unit: 0,
+                        // unit: 0,
                         index: 0,
                         line: 0,
                         column: 0,
@@ -2739,24 +2671,24 @@ mod tests {
         // long
         {
             assert_eq!(
-                lex_str_to_vec("9_223_372_036_854_775_807_i64").unwrap(),
+                lex_from_str_without_location("9_223_372_036_854_775_807_i64").unwrap(),
                 vec![Token::Number(NumberToken::I64(
                     9_223_372_036_854_775_807i64 as u64
                 )),]
             );
 
             assert_eq!(
-                lex_str_to_vec("18_446_744_073_709_551_615_u64").unwrap(),
+                lex_from_str_without_location("18_446_744_073_709_551_615_u64").unwrap(),
                 vec![Token::Number(NumberToken::U64(u64::MAX))]
             );
 
             // err: unsigned overflow
             assert!(matches!(
-                lex_str_to_vec("18_446_744_073_709_551_616_u64"),
-                Err(Error::MessageWithLocation(
+                lex_from_str_without_location("18_446_744_073_709_551_616_u64"),
+                Err(AsonError::MessageWithLocation(
                     _,
                     Location {
-                        unit: 0,
+                        // unit: 0,
                         index: 0,
                         line: 0,
                         column: 0,
@@ -2769,22 +2701,22 @@ mod tests {
         // float
         {
             assert_eq!(
-                lex_str_to_vec("3.402_823_5e+38_f32").unwrap(),
+                lex_from_str_without_location("3.402_823_5e+38_f32").unwrap(),
                 vec![Token::Number(NumberToken::F32(3.402_823_5e38f32))]
             );
 
             assert_eq!(
-                lex_str_to_vec("1.175_494_4e-38_f32").unwrap(),
+                lex_from_str_without_location("1.175_494_4e-38_f32").unwrap(),
                 vec![Token::Number(NumberToken::F32(1.175_494_4e-38f32))]
             );
 
             // err: overflow
             assert!(matches!(
-                lex_str_to_vec("3.4e39_f32"),
-                Err(Error::MessageWithLocation(
+                lex_from_str_without_location("3.4e39_f32"),
+                Err(AsonError::MessageWithLocation(
                     _,
                     Location {
-                        unit: 0,
+                        // unit: 0,
                         index: 0,
                         line: 0,
                         column: 0,
@@ -2797,24 +2729,24 @@ mod tests {
         // double
         {
             assert_eq!(
-                lex_str_to_vec("1.797_693_134_862_315_7e+308_f64").unwrap(),
+                lex_from_str_without_location("1.797_693_134_862_315_7e+308_f64").unwrap(),
                 vec![Token::Number(NumberToken::F64(
                     1.797_693_134_862_315_7e308_f64
                 )),]
             );
 
             assert_eq!(
-                lex_str_to_vec("2.2250738585072014e-308_f64").unwrap(),
+                lex_from_str_without_location("2.2250738585072014e-308_f64").unwrap(),
                 vec![Token::Number(NumberToken::F64(2.2250738585072014e-308f64)),]
             );
 
             // err: overflow
             assert!(matches!(
-                lex_str_to_vec("1.8e309_f64"),
-                Err(Error::MessageWithLocation(
+                lex_from_str_without_location("1.8e309_f64"),
+                Err(AsonError::MessageWithLocation(
                     _,
                     Location {
-                        unit: 0,
+                        // unit: 0,
                         index: 0,
                         line: 0,
                         column: 0,
@@ -2828,33 +2760,33 @@ mod tests {
     #[test]
     fn test_lex_hex_number() {
         assert_eq!(
-            lex_str_to_vec("0xabcd").unwrap(),
+            lex_from_str_without_location("0xabcd").unwrap(),
             vec![Token::Number(NumberToken::I32(0xabcd))]
         );
 
         assert_eq!(
-            lex_str_to_vec("-0xaabb").unwrap(),
+            lex_from_str_without_location("-0xaabb").unwrap(),
             vec![Token::Minus, Token::Number(NumberToken::I32(0xaabb))]
         );
 
         assert_eq!(
-            lex_str_to_vec("+0xccdd").unwrap(),
+            lex_from_str_without_location("+0xccdd").unwrap(),
             vec![Token::Plus, Token::Number(NumberToken::I32(0xccdd))]
         );
 
         // location
 
         assert_eq!(
-            lex_str_to_vec_with_range("0xab 0xdef").unwrap(),
+            lex_from_str("0xab 0xdef").unwrap(),
             vec![
                 TokenWithRange::from_position_and_length(
                     Token::Number(NumberToken::I32(0xab)),
-                    &Location::new_position(0, 0, 0, 0),
+                    &Location::new_position(/*0,*/ 0, 0, 0),
                     4
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::Number(NumberToken::I32(0xdef)),
-                    &Location::new_position(0, 5, 0, 5,),
+                    &Location::new_position(/*0,*/ 5, 0, 5,),
                     5
                 ),
             ]
@@ -2862,11 +2794,11 @@ mod tests {
 
         // err: invalid char for hex number
         assert!(matches!(
-            lex_str_to_vec("0x1234xyz"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("0x1234xyz"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 6,
                     line: 0,
                     column: 6,
@@ -2877,11 +2809,11 @@ mod tests {
 
         // err: hex number overflow
         assert!(matches!(
-            lex_str_to_vec("0x1_0000_0000"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("0x1_0000_0000"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 0,
                     line: 0,
                     column: 0,
@@ -2892,11 +2824,11 @@ mod tests {
 
         // err: empty hex number
         assert!(matches!(
-            lex_str_to_vec("0x"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("0x"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 0,
                     line: 0,
                     column: 0,
@@ -2911,17 +2843,17 @@ mod tests {
         // general
         {
             assert_eq!(
-                lex_str_to_vec("0x11i8").unwrap(),
+                lex_from_str_without_location("0x11i8").unwrap(),
                 vec![Token::Number(NumberToken::I8(0x11))]
             );
 
             assert_eq!(
-                lex_str_to_vec("0x11_i8").unwrap(),
+                lex_from_str_without_location("0x11_i8").unwrap(),
                 vec![Token::Number(NumberToken::I8(0x11))]
             );
 
             assert_eq!(
-                lex_str_to_vec("0x11__i8").unwrap(),
+                lex_from_str_without_location("0x11__i8").unwrap(),
                 vec![Token::Number(NumberToken::I8(0x11))]
             );
 
@@ -2930,16 +2862,16 @@ mod tests {
             // "0x101_i16 0x103_u32"
             //  0123456789012345678  // index
             assert_eq!(
-                lex_str_to_vec_with_range("0x101_i16 0x103_u32").unwrap(),
+                lex_from_str("0x101_i16 0x103_u32").unwrap(),
                 vec![
                     TokenWithRange::from_position_and_length(
                         Token::Number(NumberToken::I16(0x101)),
-                        &Location::new_position(0, 0, 0, 0),
+                        &Location::new_position(/*0,*/ 0, 0, 0),
                         9
                     ),
                     TokenWithRange::from_position_and_length(
                         Token::Number(NumberToken::U32(0x103)),
-                        &Location::new_position(0, 10, 0, 10),
+                        &Location::new_position(/*0,*/ 10, 0, 10),
                         9
                     ),
                 ]
@@ -2949,22 +2881,22 @@ mod tests {
         // byte
         {
             assert_eq!(
-                lex_str_to_vec("0x7f_i8").unwrap(),
+                lex_from_str_without_location("0x7f_i8").unwrap(),
                 vec![Token::Number(NumberToken::I8(0x7f_i8 as u8))]
             );
 
             assert_eq!(
-                lex_str_to_vec("0xff_u8").unwrap(),
+                lex_from_str_without_location("0xff_u8").unwrap(),
                 vec![Token::Number(NumberToken::U8(0xff_u8))]
             );
 
             // err: unsigned overflow
             assert!(matches!(
-                lex_str_to_vec("0x1_ff_u8"),
-                Err(Error::MessageWithLocation(
+                lex_from_str_without_location("0x1_ff_u8"),
+                Err(AsonError::MessageWithLocation(
                     _,
                     Location {
-                        unit: 0,
+                        // unit: 0,
                         index: 0,
                         line: 0,
                         column: 0,
@@ -2977,22 +2909,22 @@ mod tests {
         // short
         {
             assert_eq!(
-                lex_str_to_vec("0x7fff_i16").unwrap(),
+                lex_from_str_without_location("0x7fff_i16").unwrap(),
                 vec![Token::Number(NumberToken::I16(0x7fff_i16 as u16))]
             );
 
             assert_eq!(
-                lex_str_to_vec("0xffff_u16").unwrap(),
+                lex_from_str_without_location("0xffff_u16").unwrap(),
                 vec![Token::Number(NumberToken::U16(0xffff_u16))]
             );
 
             // err: unsigned overflow
             assert!(matches!(
-                lex_str_to_vec("0x1_ffff_u16"),
-                Err(Error::MessageWithLocation(
+                lex_from_str_without_location("0x1_ffff_u16"),
+                Err(AsonError::MessageWithLocation(
                     _,
                     Location {
-                        unit: 0,
+                        // unit: 0,
                         index: 0,
                         line: 0,
                         column: 0,
@@ -3005,22 +2937,22 @@ mod tests {
         // int
         {
             assert_eq!(
-                lex_str_to_vec("0x7fff_ffff_i32").unwrap(),
+                lex_from_str_without_location("0x7fff_ffff_i32").unwrap(),
                 vec![Token::Number(NumberToken::I32(0x7fff_ffff_i32 as u32))]
             );
 
             assert_eq!(
-                lex_str_to_vec("0xffff_ffff_u32").unwrap(),
+                lex_from_str_without_location("0xffff_ffff_u32").unwrap(),
                 vec![Token::Number(NumberToken::U32(0xffff_ffff_u32))]
             );
 
             // err: unsigned overflow
             assert!(matches!(
-                lex_str_to_vec("0x1_ffff_ffff_u32"),
-                Err(Error::MessageWithLocation(
+                lex_from_str_without_location("0x1_ffff_ffff_u32"),
+                Err(AsonError::MessageWithLocation(
                     _,
                     Location {
-                        unit: 0,
+                        // unit: 0,
                         index: 0,
                         line: 0,
                         column: 0,
@@ -3033,24 +2965,24 @@ mod tests {
         // long
         {
             assert_eq!(
-                lex_str_to_vec("0x7fff_ffff_ffff_ffff_i64").unwrap(),
+                lex_from_str_without_location("0x7fff_ffff_ffff_ffff_i64").unwrap(),
                 vec![Token::Number(NumberToken::I64(
                     0x7fff_ffff_ffff_ffff_i64 as u64
                 ))]
             );
 
             assert_eq!(
-                lex_str_to_vec("0xffff_ffff_ffff_ffff_u64").unwrap(),
+                lex_from_str_without_location("0xffff_ffff_ffff_ffff_u64").unwrap(),
                 vec![Token::Number(NumberToken::U64(0xffff_ffff_ffff_ffff_u64))]
             );
 
             // err: unsigned overflow
             assert!(matches!(
-                lex_str_to_vec("0x1_ffff_ffff_ffff_ffff_u64"),
-                Err(Error::MessageWithLocation(
+                lex_from_str_without_location("0x1_ffff_ffff_ffff_ffff_u64"),
+                Err(AsonError::MessageWithLocation(
                     _,
                     Location {
-                        unit: 0,
+                        // unit: 0,
                         index: 0,
                         line: 0,
                         column: 0,
@@ -3064,13 +2996,13 @@ mod tests {
         {
             // note: this is not a hex floating pointer number
             assert_eq!(
-                lex_str_to_vec("0xaa_f32").unwrap(),
+                lex_from_str_without_location("0xaa_f32").unwrap(),
                 vec![Token::Number(NumberToken::I32(0xaaf32))]
             );
 
             // note: this is not a hex floating pointer number
             assert_eq!(
-                lex_str_to_vec("0xbb_f64").unwrap(),
+                lex_from_str_without_location("0xbb_f64").unwrap(),
                 vec![Token::Number(NumberToken::I32(0xbbf64))]
             );
         }
@@ -3080,46 +3012,46 @@ mod tests {
     fn test_lex_hex_number_floating_point() {
         // default type is f64
         assert_eq!(
-            lex_str_to_vec("0x1.4p3").unwrap(),
+            lex_from_str_without_location("0x1.4p3").unwrap(),
             vec![Token::Number(NumberToken::F64(10f64))]
         );
 
         // 3.1415927f32
         assert_eq!(
-            lex_str_to_vec("0x1.921fb6p1f32").unwrap(),
+            lex_from_str_without_location("0x1.921fb6p1f32").unwrap(),
             vec![Token::Number(NumberToken::F32(std::f32::consts::PI))]
         );
 
         // 2.718281828459045f64
         assert_eq!(
-            lex_str_to_vec("0x1.5bf0a8b145769p+1_f64").unwrap(),
+            lex_from_str_without_location("0x1.5bf0a8b145769p+1_f64").unwrap(),
             vec![Token::Number(NumberToken::F64(std::f64::consts::E))]
         );
 
         // https://observablehq.com/@jrus/hexfloat
         assert_eq!(
-            lex_str_to_vec("0x1.62e42fefa39efp-1_f64").unwrap(),
+            lex_from_str_without_location("0x1.62e42fefa39efp-1_f64").unwrap(),
             vec![Token::Number(NumberToken::F64(std::f64::consts::LN_2))]
         );
 
         // location
 
         assert_eq!(
-            lex_str_to_vec_with_range("0x1.4p3").unwrap(),
+            lex_from_str("0x1.4p3").unwrap(),
             vec![TokenWithRange::from_position_and_length(
                 Token::Number(NumberToken::F64(10f64)),
-                &Location::new_position(0, 0, 0, 0),
+                &Location::new_position(/*0,*/ 0, 0, 0),
                 7
             )]
         );
 
         // err: missing the exponent
         assert!(matches!(
-            lex_str_to_vec("0x1.23"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("0x1.23"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 0,
                     line: 0,
                     column: 0,
@@ -3130,11 +3062,11 @@ mod tests {
 
         // err: multiple '.' (point)
         assert!(matches!(
-            lex_str_to_vec("0x1.2.3"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("0x1.2.3"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 5,
                     line: 0,
                     column: 5,
@@ -3145,11 +3077,11 @@ mod tests {
 
         // err: multiple 'p' (exponent)
         assert!(matches!(
-            lex_str_to_vec("0x1.2p3p4"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("0x1.2p3p4"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 7,
                     line: 0,
                     column: 7,
@@ -3160,11 +3092,11 @@ mod tests {
 
         // err: incorrect type (invalid dot '.' after 'p')
         assert!(matches!(
-            lex_str_to_vec("0x1.23p4.5"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("0x1.23p4.5"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 8,
                     line: 0,
                     column: 8,
@@ -3175,11 +3107,11 @@ mod tests {
 
         // err: incorrect type (invalid char 'i' after 'p')
         assert!(matches!(
-            lex_str_to_vec("0x1.23p4_i32"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("0x1.23p4_i32"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 9,
                     line: 0,
                     column: 9,
@@ -3192,33 +3124,33 @@ mod tests {
     #[test]
     fn test_lex_binary_number() {
         assert_eq!(
-            lex_str_to_vec("0b1100").unwrap(),
+            lex_from_str_without_location("0b1100").unwrap(),
             vec![Token::Number(NumberToken::I32(0b1100))]
         );
 
         assert_eq!(
-            lex_str_to_vec("-0b1010").unwrap(),
+            lex_from_str_without_location("-0b1010").unwrap(),
             vec![Token::Minus, Token::Number(NumberToken::I32(0b1010))]
         );
 
         assert_eq!(
-            lex_str_to_vec("+0b0101").unwrap(),
+            lex_from_str_without_location("+0b0101").unwrap(),
             vec![Token::Plus, Token::Number(NumberToken::I32(0b0101))]
         );
 
         // location
 
         assert_eq!(
-            lex_str_to_vec_with_range("0b10 0b0101").unwrap(),
+            lex_from_str("0b10 0b0101").unwrap(),
             vec![
                 TokenWithRange::from_position_and_length(
                     Token::Number(NumberToken::I32(0b10)),
-                    &Location::new_position(0, 0, 0, 0,),
+                    &Location::new_position(/*0,*/ 0, 0, 0,),
                     4
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::Number(NumberToken::I32(0b0101)),
-                    &Location::new_position(0, 5, 0, 5,),
+                    &Location::new_position(/*0,*/ 5, 0, 5,),
                     6
                 ),
             ]
@@ -3226,11 +3158,11 @@ mod tests {
 
         // err: does not support binary floating point
         assert!(matches!(
-            lex_str_to_vec("0b11.10"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("0b11.10"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 4,
                     line: 0,
                     column: 4,
@@ -3241,11 +3173,11 @@ mod tests {
 
         // err: binary number overflow
         assert!(matches!(
-            lex_str_to_vec("0b1_0000_0000_0000_0000_0000_0000_0000_0000"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("0b1_0000_0000_0000_0000_0000_0000_0000_0000"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 0,
                     line: 0,
                     column: 0,
@@ -3256,11 +3188,11 @@ mod tests {
 
         // err: invalid char for binary number
         assert!(matches!(
-            lex_str_to_vec("0b101xyz"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("0b101xyz"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 5,
                     line: 0,
                     column: 5,
@@ -3271,11 +3203,11 @@ mod tests {
 
         // err: empty binary number
         assert!(matches!(
-            lex_str_to_vec("0b"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("0b"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 0,
                     line: 0,
                     column: 0,
@@ -3290,17 +3222,17 @@ mod tests {
         // general
         {
             assert_eq!(
-                lex_str_to_vec("0b11i8").unwrap(),
+                lex_from_str_without_location("0b11i8").unwrap(),
                 vec![Token::Number(NumberToken::I8(0b11))]
             );
 
             assert_eq!(
-                lex_str_to_vec("0b11_i8").unwrap(),
+                lex_from_str_without_location("0b11_i8").unwrap(),
                 vec![Token::Number(NumberToken::I8(0b11))]
             );
 
             assert_eq!(
-                lex_str_to_vec("0b11__i8").unwrap(),
+                lex_from_str_without_location("0b11__i8").unwrap(),
                 vec![Token::Number(NumberToken::I8(0b11))]
             );
 
@@ -3309,16 +3241,16 @@ mod tests {
             // "0b101_i16 0b1010_u32"
             //  01234567890123456789  // index
             assert_eq!(
-                lex_str_to_vec_with_range("0b101_i16 0b1010_u32").unwrap(),
+                lex_from_str("0b101_i16 0b1010_u32").unwrap(),
                 vec![
                     TokenWithRange::from_position_and_length(
                         Token::Number(NumberToken::I16(0b101)),
-                        &Location::new_position(0, 0, 0, 0),
+                        &Location::new_position(/*0,*/ 0, 0, 0),
                         9
                     ),
                     TokenWithRange::from_position_and_length(
                         Token::Number(NumberToken::U32(0b1010)),
-                        &Location::new_position(0, 10, 0, 10),
+                        &Location::new_position(/*0,*/ 10, 0, 10),
                         10
                     ),
                 ]
@@ -3328,22 +3260,22 @@ mod tests {
         // byte
         {
             assert_eq!(
-                lex_str_to_vec("0b0111_1111_i8").unwrap(),
+                lex_from_str_without_location("0b0111_1111_i8").unwrap(),
                 vec![Token::Number(NumberToken::I8(0x7f_i8 as u8))]
             );
 
             assert_eq!(
-                lex_str_to_vec("0b1111_1111_u8").unwrap(),
+                lex_from_str_without_location("0b1111_1111_u8").unwrap(),
                 vec![Token::Number(NumberToken::U8(0xff_u8))]
             );
 
             // err: unsigned overflow
             assert!(matches!(
-                lex_str_to_vec("0b1_1111_1111_u8"),
-                Err(Error::MessageWithLocation(
+                lex_from_str_without_location("0b1_1111_1111_u8"),
+                Err(AsonError::MessageWithLocation(
                     _,
                     Location {
-                        unit: 0,
+                        // unit: 0,
                         index: 0,
                         line: 0,
                         column: 0,
@@ -3356,22 +3288,22 @@ mod tests {
         // short
         {
             assert_eq!(
-                lex_str_to_vec("0b0111_1111_1111_1111_i16").unwrap(),
+                lex_from_str_without_location("0b0111_1111_1111_1111_i16").unwrap(),
                 vec![Token::Number(NumberToken::I16(0x7fff_i16 as u16))]
             );
 
             assert_eq!(
-                lex_str_to_vec("0b1111_1111_1111_1111_u16").unwrap(),
+                lex_from_str_without_location("0b1111_1111_1111_1111_u16").unwrap(),
                 vec![Token::Number(NumberToken::U16(0xffff_u16))]
             );
 
             // err: unsigned overflow
             assert!(matches!(
-                lex_str_to_vec("0b1_1111_1111_1111_1111_u16"),
-                Err(Error::MessageWithLocation(
+                lex_from_str_without_location("0b1_1111_1111_1111_1111_u16"),
+                Err(AsonError::MessageWithLocation(
                     _,
                     Location {
-                        unit: 0,
+                        // unit: 0,
                         index: 0,
                         line: 0,
                         column: 0,
@@ -3384,22 +3316,24 @@ mod tests {
         // int
         {
             assert_eq!(
-                lex_str_to_vec("0b0111_1111_1111_1111__1111_1111_1111_1111_i32").unwrap(),
+                lex_from_str_without_location("0b0111_1111_1111_1111__1111_1111_1111_1111_i32")
+                    .unwrap(),
                 vec![Token::Number(NumberToken::I32(0x7fff_ffff_i32 as u32))]
             );
 
             assert_eq!(
-                lex_str_to_vec("0b1111_1111_1111_1111__1111_1111_1111_1111_u32").unwrap(),
+                lex_from_str_without_location("0b1111_1111_1111_1111__1111_1111_1111_1111_u32")
+                    .unwrap(),
                 vec![Token::Number(NumberToken::U32(0xffff_ffff_u32))]
             );
 
             // err: unsigned overflow
             assert!(matches!(
-                lex_str_to_vec("0b1_1111_1111_1111_1111__1111_1111_1111_1111_u32"),
-                Err(Error::MessageWithLocation(
+                lex_from_str_without_location("0b1_1111_1111_1111_1111__1111_1111_1111_1111_u32"),
+                Err(AsonError::MessageWithLocation(
                     _,
                     Location {
-                        unit: 0,
+                        // unit: 0,
                         index: 0,
                         line: 0,
                         column: 0,
@@ -3412,22 +3346,22 @@ mod tests {
         // long
         {
             assert_eq!(
-                lex_str_to_vec("0b0111_1111_1111_1111__1111_1111_1111_1111__1111_1111_1111_1111__1111_1111_1111_1111_i64").unwrap(),
+                lex_from_str_without_location("0b0111_1111_1111_1111__1111_1111_1111_1111__1111_1111_1111_1111__1111_1111_1111_1111_i64").unwrap(),
                 vec![Token::Number(NumberToken::I64(0x7fff_ffff_ffff_ffff_i64 as u64))]
             );
 
             assert_eq!(
-                lex_str_to_vec("0b1111_1111_1111_1111__1111_1111_1111_1111__1111_1111_1111_1111__1111_1111_1111_1111_u64").unwrap(),
+                lex_from_str_without_location("0b1111_1111_1111_1111__1111_1111_1111_1111__1111_1111_1111_1111__1111_1111_1111_1111_u64").unwrap(),
                 vec![Token::Number(NumberToken::U64(0xffff_ffff_ffff_ffff_u64))]
             );
 
             // err: unsigned overflow
             assert!(matches!(
-                lex_str_to_vec("0b1_1111_1111_1111_1111__1111_1111_1111_1111__1111_1111_1111_1111__1111_1111_1111_1111_u64"),
-                Err(Error::MessageWithLocation(
+                lex_from_str_without_location("0b1_1111_1111_1111_1111__1111_1111_1111_1111__1111_1111_1111_1111__1111_1111_1111_1111_u64"),
+                Err(AsonError::MessageWithLocation(
                     _,
                     Location {
-                        unit: 0,
+                        // unit: 0,
                         index: 0,
                         line: 0,
                         column: 0,
@@ -3439,11 +3373,11 @@ mod tests {
 
         // err: does not support binary floating pointer number (invalid char 'f' for binary number)
         assert!(matches!(
-            lex_str_to_vec("0b11_f32"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("0b11_f32"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 5,
                     line: 0,
                     column: 5,
@@ -3455,97 +3389,130 @@ mod tests {
 
     #[test]
     fn test_lex_char() {
-        assert_eq!(lex_str_to_vec("'a'").unwrap(), vec![Token::Char('a')]);
+        assert_eq!(
+            lex_from_str_without_location("'a'").unwrap(),
+            vec![Token::Char('a')]
+        );
 
         assert_eq!(
-            lex_str_to_vec("('a')").unwrap(),
+            lex_from_str_without_location("('a')").unwrap(),
             vec![Token::LeftParen, Token::Char('a'), Token::RightParen]
         );
 
         assert_eq!(
-            lex_str_to_vec("'a' 'z'").unwrap(),
+            lex_from_str_without_location("'a' 'z'").unwrap(),
             vec![Token::Char('a'), Token::Char('z')]
         );
 
         // CJK
-        assert_eq!(lex_str_to_vec("'文'").unwrap(), vec![Token::Char('文')]);
+        assert_eq!(
+            lex_from_str_without_location("'文'").unwrap(),
+            vec![Token::Char('文')]
+        );
 
         // emoji
-        assert_eq!(lex_str_to_vec("'😊'").unwrap(), vec![Token::Char('😊')]);
+        assert_eq!(
+            lex_from_str_without_location("'😊'").unwrap(),
+            vec![Token::Char('😊')]
+        );
 
         // escape char `\\`
-        assert_eq!(lex_str_to_vec("'\\\\'").unwrap(), vec![Token::Char('\\')]);
+        assert_eq!(
+            lex_from_str_without_location("'\\\\'").unwrap(),
+            vec![Token::Char('\\')]
+        );
 
         // escape char `\'`
-        assert_eq!(lex_str_to_vec("'\\\''").unwrap(), vec![Token::Char('\'')]);
+        assert_eq!(
+            lex_from_str_without_location("'\\\''").unwrap(),
+            vec![Token::Char('\'')]
+        );
 
         // escape char `"`
-        assert_eq!(lex_str_to_vec("'\\\"'").unwrap(), vec![Token::Char('"')]);
+        assert_eq!(
+            lex_from_str_without_location("'\\\"'").unwrap(),
+            vec![Token::Char('"')]
+        );
 
         // escape char `\t`
-        assert_eq!(lex_str_to_vec("'\\t'").unwrap(), vec![Token::Char('\t')]);
+        assert_eq!(
+            lex_from_str_without_location("'\\t'").unwrap(),
+            vec![Token::Char('\t')]
+        );
 
         // escape char `\r`
-        assert_eq!(lex_str_to_vec("'\\r'").unwrap(), vec![Token::Char('\r')]);
+        assert_eq!(
+            lex_from_str_without_location("'\\r'").unwrap(),
+            vec![Token::Char('\r')]
+        );
 
         // escape char `\n`
-        assert_eq!(lex_str_to_vec("'\\n'").unwrap(), vec![Token::Char('\n')]);
+        assert_eq!(
+            lex_from_str_without_location("'\\n'").unwrap(),
+            vec![Token::Char('\n')]
+        );
 
         // escape char `\0`
-        assert_eq!(lex_str_to_vec("'\\0'").unwrap(), vec![Token::Char('\0')]);
-
-        // escape char, unicode
-        assert_eq!(lex_str_to_vec("'\\u{2d}'").unwrap(), vec![Token::Char('-')]);
+        assert_eq!(
+            lex_from_str_without_location("'\\0'").unwrap(),
+            vec![Token::Char('\0')]
+        );
 
         // escape char, unicode
         assert_eq!(
-            lex_str_to_vec("'\\u{6587}'").unwrap(),
+            lex_from_str_without_location("'\\u{2d}'").unwrap(),
+            vec![Token::Char('-')]
+        );
+
+        // escape char, unicode
+        assert_eq!(
+            lex_from_str_without_location("'\\u{6587}'").unwrap(),
             vec![Token::Char('文')]
         );
 
         // location
 
         assert_eq!(
-            lex_str_to_vec_with_range("'a' '文'").unwrap(),
+            lex_from_str("'a' '文'").unwrap(),
             vec![
                 TokenWithRange::from_position_and_length(
                     Token::Char('a'),
-                    &Location::new_position(0, 0, 0, 0),
+                    &Location::new_position(/*0,*/ 0, 0, 0),
                     3
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::Char('文'),
-                    &Location::new_position(0, 4, 0, 4),
+                    &Location::new_position(/*0,*/ 4, 0, 4),
                     3
                 )
             ]
         );
 
         assert_eq!(
-            lex_str_to_vec_with_range("'\\t'").unwrap(),
+            lex_from_str("'\\t'").unwrap(),
             vec![TokenWithRange::from_position_and_length(
                 Token::Char('\t'),
-                &Location::new_position(0, 0, 0, 0),
+                &Location::new_position(/*0,*/ 0, 0, 0),
                 4
             )]
         );
 
         assert_eq!(
-            lex_str_to_vec_with_range("'\\u{6587}'").unwrap(),
+            lex_from_str("'\\u{6587}'").unwrap(),
             vec![TokenWithRange::from_position_and_length(
                 Token::Char('文'),
-                &Location::new_position(0, 0, 0, 0),
+                &Location::new_position(/*0,*/ 0, 0, 0),
                 10
             )]
         );
 
         // err: empty char
         assert!(matches!(
-            lex_str_to_vec("''"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("''"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 0,
                     line: 0,
                     column: 0,
@@ -3556,23 +3523,23 @@ mod tests {
 
         // err: empty char, missing the char
         assert!(matches!(
-            lex_str_to_vec("'"),
-            Err(Error::UnexpectedEndOfDocument(_))
+            lex_from_str_without_location("'"),
+            Err(AsonError::UnexpectedEndOfDocument(_))
         ));
 
         // err: incomplete char, missing the right quote, encounter EOF
         assert!(matches!(
-            lex_str_to_vec("'a"),
-            Err(Error::UnexpectedEndOfDocument(_))
+            lex_from_str_without_location("'a"),
+            Err(AsonError::UnexpectedEndOfDocument(_))
         ));
 
         // err: invalid char, expect the right quote, encounter another char
         assert!(matches!(
-            lex_str_to_vec("'ab"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("'ab"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 2,
                     line: 0,
                     column: 2,
@@ -3583,11 +3550,11 @@ mod tests {
 
         // err: invalid char, expect the right quote, encounter another char
         assert!(matches!(
-            lex_str_to_vec("'ab'"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("'ab'"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 2,
                     line: 0,
                     column: 2,
@@ -3598,11 +3565,11 @@ mod tests {
 
         // err: unsupported escape char \v
         assert!(matches!(
-            lex_str_to_vec(r#"'\v'"#),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location(r#"'\v'"#),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 1,
                     line: 0,
                     column: 1,
@@ -3613,11 +3580,11 @@ mod tests {
 
         // err: unsupported hex escape "\x.."
         assert!(matches!(
-            lex_str_to_vec(r#"'\x33'"#),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location(r#"'\x33'"#),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 1,
                     line: 0,
                     column: 1,
@@ -3630,11 +3597,11 @@ mod tests {
         // "'\\u{}'"
         //  01 2345     // index
         assert!(matches!(
-            lex_str_to_vec("'\\u{}'"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("'\\u{}'"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 3,
                     line: 0,
                     column: 3,
@@ -3647,11 +3614,11 @@ mod tests {
         // "'\\u{1000111}'"
         //  01 234567890    // index
         assert!(matches!(
-            lex_str_to_vec("'\\u{1000111}'"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("'\\u{1000111}'"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 3,
                     line: 0,
                     column: 3,
@@ -3664,11 +3631,11 @@ mod tests {
         // "'\\u{123456}'"
         //  01 2345678901
         assert!(matches!(
-            lex_str_to_vec("'\\u{123456}'"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("'\\u{123456}'"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 3,
                     line: 0,
                     column: 3,
@@ -3679,11 +3646,11 @@ mod tests {
 
         // err: invalid char in the unicode escape sequence
         assert!(matches!(
-            lex_str_to_vec("'\\u{12mn}''"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("'\\u{12mn}''"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 6,
                     line: 0,
                     column: 6,
@@ -3694,11 +3661,11 @@ mod tests {
 
         // err: missing the closed brace for unicode escape sequence
         assert!(matches!(
-            lex_str_to_vec("'\\u{1234'"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("'\\u{1234'"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 8,
                     line: 0,
                     column: 8,
@@ -3709,17 +3676,17 @@ mod tests {
 
         // err: incomplete unicode escape sequence, encounter EOF
         assert!(matches!(
-            lex_str_to_vec("'\\u{1234"),
-            Err(Error::UnexpectedEndOfDocument(_))
+            lex_from_str_without_location("'\\u{1234"),
+            Err(AsonError::UnexpectedEndOfDocument(_))
         ));
 
         // err: missing left brace for unicode escape sequence
         assert!(matches!(
-            lex_str_to_vec("'\\u1234}'"),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("'\\u1234}'"),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 3,
                     line: 0,
                     column: 3,
@@ -3732,12 +3699,12 @@ mod tests {
     #[test]
     fn test_lex_string() {
         assert_eq!(
-            lex_str_to_vec(r#""abc""#).unwrap(),
+            lex_from_str_without_location(r#""abc""#).unwrap(),
             vec![Token::new_string("abc")]
         );
 
         assert_eq!(
-            lex_str_to_vec(r#"("abc")"#).unwrap(),
+            lex_from_str_without_location(r#"("abc")"#).unwrap(),
             vec![
                 Token::LeftParen,
                 Token::new_string("abc"),
@@ -3746,12 +3713,12 @@ mod tests {
         );
 
         assert_eq!(
-            lex_str_to_vec(r#""abc" "xyz""#).unwrap(),
+            lex_from_str_without_location(r#""abc" "xyz""#).unwrap(),
             vec![Token::new_string("abc"), Token::new_string("xyz")]
         );
 
         assert_eq!(
-            lex_str_to_vec("\"abc\"\n\n\"xyz\"").unwrap(),
+            lex_from_str_without_location("\"abc\"\n\n\"xyz\"").unwrap(),
             vec![
                 Token::new_string("abc"),
                 Token::NewLine,
@@ -3762,7 +3729,7 @@ mod tests {
 
         // unicode
         assert_eq!(
-            lex_str_to_vec(
+            lex_from_str_without_location(
                 r#"
                 "abc文字😊"
                 "#
@@ -3776,11 +3743,14 @@ mod tests {
         );
 
         // empty string
-        assert_eq!(lex_str_to_vec("\"\"").unwrap(), vec![Token::new_string("")]);
+        assert_eq!(
+            lex_from_str_without_location("\"\"").unwrap(),
+            vec![Token::new_string("")]
+        );
 
         // escape chars
         assert_eq!(
-            lex_str_to_vec(
+            lex_from_str_without_location(
                 r#"
                 "\\\'\"\t\r\n\0\u{2d}\u{6587}"
                 "#
@@ -3798,16 +3768,16 @@ mod tests {
         // 01234567 8 9 0
 
         assert_eq!(
-            lex_str_to_vec_with_range(r#""abc" "文字😊""#).unwrap(),
+            lex_from_str(r#""abc" "文字😊""#).unwrap(),
             vec![
                 TokenWithRange::from_position_and_length(
                     Token::new_string("abc"),
-                    &Location::new_position(0, 0, 0, 0),
+                    &Location::new_position(/*0,*/ 0, 0, 0),
                     5
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::new_string("文字😊"),
-                    &Location::new_position(0, 6, 0, 6),
+                    &Location::new_position(/*0,*/ 6, 0, 6),
                     5
                 ),
             ]
@@ -3815,29 +3785,29 @@ mod tests {
 
         // err: incomplete string, missing the closed quote
         assert!(matches!(
-            lex_str_to_vec("\"abc"),
-            Err(Error::UnexpectedEndOfDocument(_))
+            lex_from_str_without_location("\"abc"),
+            Err(AsonError::UnexpectedEndOfDocument(_))
         ));
 
         // err: incomplete string, missing the closed quote, ends with \n
         assert!(matches!(
-            lex_str_to_vec("\"abc\n"),
-            Err(Error::UnexpectedEndOfDocument(_))
+            lex_from_str_without_location("\"abc\n"),
+            Err(AsonError::UnexpectedEndOfDocument(_))
         ));
 
         // err: incomplete string, missing the closed quote, ends with whitespaces/other chars
         assert!(matches!(
-            lex_str_to_vec("\"abc\n   "),
-            Err(Error::UnexpectedEndOfDocument(_))
+            lex_from_str_without_location("\"abc\n   "),
+            Err(AsonError::UnexpectedEndOfDocument(_))
         ));
 
         // err: unsupported escape char \v
         assert!(matches!(
-            lex_str_to_vec(r#""abc\vxyz""#),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location(r#""abc\vxyz""#),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 4,
                     line: 0,
                     column: 4,
@@ -3848,11 +3818,11 @@ mod tests {
 
         // err: unsupported hex escape "\x.."
         assert!(matches!(
-            lex_str_to_vec(r#""abc\x33xyz""#),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location(r#""abc\x33xyz""#),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 4,
                     line: 0,
                     column: 4,
@@ -3865,11 +3835,11 @@ mod tests {
         // "abc\u{}"
         // 012345678    // index
         assert!(matches!(
-            lex_str_to_vec(r#""abc\u{}xyz""#),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location(r#""abc\u{}xyz""#),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 6,
                     line: 0,
                     column: 6,
@@ -3882,11 +3852,11 @@ mod tests {
         // "abc\u{1000111}xyz"
         // 0123456789023456789    // index
         assert!(matches!(
-            lex_str_to_vec(r#""abc\u{1000111}xyz""#),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location(r#""abc\u{1000111}xyz""#),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 6,
                     line: 0,
                     column: 6,
@@ -3899,11 +3869,11 @@ mod tests {
         // "abc\u{123456}xyz"
         // 012345678901234567
         assert!(matches!(
-            lex_str_to_vec(r#""abc\u{123456}xyz""#),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location(r#""abc\u{123456}xyz""#),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 6,
                     line: 0,
                     column: 6,
@@ -3914,11 +3884,11 @@ mod tests {
 
         // err: invalid char in the unicode escape sequence
         assert!(matches!(
-            lex_str_to_vec(r#""abc\u{12mn}xyz""#),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location(r#""abc\u{12mn}xyz""#),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 9,
                     line: 0,
                     column: 9,
@@ -3929,11 +3899,11 @@ mod tests {
 
         // err: missing the right brace for unicode escape sequence
         assert!(matches!(
-            lex_str_to_vec(r#""abc\u{1234""#),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location(r#""abc\u{1234""#),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 11,
                     line: 0,
                     column: 11,
@@ -3944,17 +3914,17 @@ mod tests {
 
         // err: incomplete unicode escape sequence, encounter EOF
         assert!(matches!(
-            lex_str_to_vec(r#""abc\u{1234"#),
-            Err(Error::UnexpectedEndOfDocument(_))
+            lex_from_str_without_location(r#""abc\u{1234"#),
+            Err(AsonError::UnexpectedEndOfDocument(_))
         ));
 
         // err: missing left brace for unicode escape sequence
         assert!(matches!(
-            lex_str_to_vec(r#""abc\u1234}xyz""#),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location(r#""abc\u1234}xyz""#),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 6,
                     line: 0,
                     column: 6,
@@ -3967,28 +3937,28 @@ mod tests {
     #[test]
     fn test_lex_multiple_line_string() {
         assert_eq!(
-            lex_str_to_vec("\"abc\n    \n\n    \n\"").unwrap(),
+            lex_from_str_without_location("\"abc\n    \n\n    \n\"").unwrap(),
             vec![Token::new_string("abc\n    \n\n    \n")]
         );
 
         assert_eq!(
-            lex_str_to_vec("\"abc\ndef\n    uvw\r\n\t  \txyz\"").unwrap(),
+            lex_from_str_without_location("\"abc\ndef\n    uvw\r\n\t  \txyz\"").unwrap(),
             vec![Token::new_string("abc\ndef\n    uvw\r\n\t  \txyz")]
         );
 
         // location
 
         assert_eq!(
-            lex_str_to_vec_with_range("\"abc\n    xyz\n\" \"foo\nbar\"").unwrap(),
+            lex_from_str("\"abc\n    xyz\n\" \"foo\nbar\"").unwrap(),
             vec![
                 TokenWithRange::from_position_and_length(
                     Token::new_string("abc\n    xyz\n"),
-                    &Location::new_position(0, 0, 0, 0),
+                    &Location::new_position(/*0,*/ 0, 0, 0),
                     14
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::new_string("foo\nbar"),
-                    &Location::new_position(0, 15, 2, 2),
+                    &Location::new_position(/*0,*/ 15, 2, 2),
                     9
                 )
             ]
@@ -3996,14 +3966,14 @@ mod tests {
 
         // err: incomplete string, missing the closed quote, ends with \n
         assert!(matches!(
-            lex_str_to_vec("\"abc\n    \n\n    \n"),
-            Err(Error::UnexpectedEndOfDocument(_))
+            lex_from_str_without_location("\"abc\n    \n\n    \n"),
+            Err(AsonError::UnexpectedEndOfDocument(_))
         ));
 
         // err: incomplete string, missing the closed quote, whitespaces/other chars
         assert!(matches!(
-            lex_str_to_vec("\"abc\n    \n\n    \n   "),
-            Err(Error::UnexpectedEndOfDocument(_))
+            lex_from_str_without_location("\"abc\n    \n\n    \n   "),
+            Err(AsonError::UnexpectedEndOfDocument(_))
         ));
     }
 
@@ -4011,29 +3981,29 @@ mod tests {
     fn test_lex_long_string() {
         // the tailing '\' should escapes the new-line chars
         assert_eq!(
-            lex_str_to_vec("\"abc\\\ndef\\\n    opq\\\r\n\t  \txyz\"").unwrap(),
+            lex_from_str_without_location("\"abc\\\ndef\\\n    opq\\\r\n\t  \txyz\"").unwrap(),
             vec![Token::new_string("abcdefopqxyz")]
         );
 
         // the tailing '\' should escapes the new-line chars and trim the leading white-spaces
         assert_eq!(
-            lex_str_to_vec("\"\\\n  \t  \"").unwrap(),
+            lex_from_str_without_location("\"\\\n  \t  \"").unwrap(),
             vec![Token::new_string("")]
         );
 
         // location
 
         assert_eq!(
-            lex_str_to_vec_with_range("\"abc\\\n\\\n    xyz\" \"\\\n\"").unwrap(),
+            lex_from_str("\"abc\\\n\\\n    xyz\" \"\\\n\"").unwrap(),
             vec![
                 TokenWithRange::from_position_and_length(
                     Token::new_string("abcxyz"),
-                    &Location::new_position(0, 0, 0, 0),
+                    &Location::new_position(/*0,*/ 0, 0, 0),
                     16
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::new_string(""),
-                    &Location::new_position(0, 17, 2, 9),
+                    &Location::new_position(/*0,*/ 17, 2, 9),
                     4
                 )
             ]
@@ -4041,21 +4011,21 @@ mod tests {
 
         // err: incomplete string, missing the right quote, ends with \n
         assert!(matches!(
-            lex_str_to_vec("\"abc\\\n"),
-            Err(Error::UnexpectedEndOfDocument(_))
+            lex_from_str_without_location("\"abc\\\n"),
+            Err(AsonError::UnexpectedEndOfDocument(_))
         ));
 
         // err: incomplete string, missing the right quote, ends with whitespaces/other chars
         assert!(matches!(
-            lex_str_to_vec("\"abc\\\n    "),
-            Err(Error::UnexpectedEndOfDocument(_))
+            lex_from_str_without_location("\"abc\\\n    "),
+            Err(AsonError::UnexpectedEndOfDocument(_))
         ));
     }
 
     #[test]
     fn test_lex_raw_string() {
         assert_eq!(
-            lex_str_to_vec(
+            lex_from_str_without_location(
                 "r\"abc\ndef\n    uvw\r\n\t escape: \\r\\n\\t\\\\ unicode: \\u{1234} xyz\""
             )
             .unwrap(),
@@ -4067,16 +4037,16 @@ mod tests {
         // location
 
         assert_eq!(
-            lex_str_to_vec_with_range("r\"abc\n    xyz\" r\"foo\\nbar\"").unwrap(),
+            lex_from_str("r\"abc\n    xyz\" r\"foo\\nbar\"").unwrap(),
             vec![
                 TokenWithRange::from_position_and_length(
                     Token::new_string("abc\n    xyz"),
-                    &Location::new_position(0, 0, 0, 0),
+                    &Location::new_position(/*0,*/ 0, 0, 0),
                     14
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::new_string("foo\\nbar"),
-                    &Location::new_position(0, 15, 1, 9),
+                    &Location::new_position(/*0,*/ 15, 1, 9),
                     11
                 )
             ]
@@ -4084,27 +4054,27 @@ mod tests {
 
         // err: incomplete string, missing the right quote
         assert!(matches!(
-            lex_str_to_vec("r\"abc    "),
-            Err(Error::UnexpectedEndOfDocument(_))
+            lex_from_str_without_location("r\"abc    "),
+            Err(AsonError::UnexpectedEndOfDocument(_))
         ));
 
         // err: incomplete string, missing the right quote, ends with \n
         assert!(matches!(
-            lex_str_to_vec("r\"abc\n"),
-            Err(Error::UnexpectedEndOfDocument(_))
+            lex_from_str_without_location("r\"abc\n"),
+            Err(AsonError::UnexpectedEndOfDocument(_))
         ));
 
         // err: incomplete string, missing the right quote, ends with whitespaces/other chars
         assert!(matches!(
-            lex_str_to_vec("r\"abc\n   "),
-            Err(Error::UnexpectedEndOfDocument(_))
+            lex_from_str_without_location("r\"abc\n   "),
+            Err(AsonError::UnexpectedEndOfDocument(_))
         ));
     }
 
     #[test]
     fn test_lex_raw_string_with_hash_symbol() {
         assert_eq!(
-            lex_str_to_vec(
+            lex_from_str_without_location(
                 "r#\"abc\ndef\n    uvw\r\n\t escape: \\r\\n\\t\\\\ unicode: \\u{1234} xyz quote: \"foo\"\"#"
             ).unwrap(),
             vec![Token::new_string(
@@ -4115,16 +4085,16 @@ mod tests {
         // location
 
         assert_eq!(
-            lex_str_to_vec_with_range("r#\"abc\n    xyz\"# r#\"foo\\nbar\"#").unwrap(),
+            lex_from_str("r#\"abc\n    xyz\"# r#\"foo\\nbar\"#").unwrap(),
             vec![
                 TokenWithRange::from_position_and_length(
                     Token::new_string("abc\n    xyz"),
-                    &Location::new_position(0, 0, 0, 0),
+                    &Location::new_position(/*0,*/ 0, 0, 0),
                     16
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::new_string("foo\\nbar"),
-                    &Location::new_position(0, 17, 1, 10),
+                    &Location::new_position(/*0,*/ 17, 1, 10),
                     13
                 )
             ]
@@ -4132,27 +4102,27 @@ mod tests {
 
         // err: incomplete string, missing the closed hash
         assert!(matches!(
-            lex_str_to_vec("r#\"abc    \""),
-            Err(Error::UnexpectedEndOfDocument(_))
+            lex_from_str_without_location("r#\"abc    \""),
+            Err(AsonError::UnexpectedEndOfDocument(_))
         ));
 
         // err: incomplete string, missing the closed quote, ends with \n
         assert!(matches!(
-            lex_str_to_vec("r#\"abc\n"),
-            Err(Error::UnexpectedEndOfDocument(_))
+            lex_from_str_without_location("r#\"abc\n"),
+            Err(AsonError::UnexpectedEndOfDocument(_))
         ));
 
         // err: incomplete string, missing the closed quote, ends with whitespace/other chars
         assert!(matches!(
-            lex_str_to_vec("r#\"abc\nxyz"),
-            Err(Error::UnexpectedEndOfDocument(_))
+            lex_from_str_without_location("r#\"abc\nxyz"),
+            Err(AsonError::UnexpectedEndOfDocument(_))
         ));
     }
 
     #[test]
     fn test_lex_auto_trimmed_string() {
         assert_eq!(
-            lex_str_to_vec(
+            lex_from_str_without_location(
                 r#"
                 """
                 one
@@ -4171,7 +4141,7 @@ mod tests {
         );
 
         assert_eq!(
-            lex_str_to_vec(
+            lex_from_str_without_location(
                 r#"
                 """
                 one
@@ -4191,7 +4161,7 @@ mod tests {
 
         // contains empty lines
         assert_eq!(
-            lex_str_to_vec(
+            lex_from_str_without_location(
                 r#"
                 """
                     one\\\"\t\r\n\u{1234}
@@ -4210,7 +4180,7 @@ mod tests {
 
         // including (""")
         assert_eq!(
-            lex_str_to_vec(
+            lex_from_str_without_location(
                 r#"
                 """
                     one"""
@@ -4228,7 +4198,7 @@ mod tests {
 
         // inline
         assert_eq!(
-            lex_str_to_vec(
+            lex_from_str_without_location(
                 r#"
                 11 """
                     abc
@@ -4248,7 +4218,7 @@ mod tests {
         // location
 
         assert_eq!(
-            lex_str_to_vec_with_range(
+            lex_from_str(
                 r#"["""
     foo
     bar
@@ -4261,27 +4231,27 @@ mod tests {
             vec![
                 TokenWithRange::from_position_and_length(
                     Token::LeftBracket,
-                    &Location::new_position(0, 0, 0, 0),
+                    &Location::new_position(/*0,*/ 0, 0, 0),
                     1
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::new_string("foo\nbar"),
-                    &Location::new_position(0, 1, 0, 1),
+                    &Location::new_position(/*0,*/ 1, 0, 1),
                     23
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::Comma,
-                    &Location::new_position(0, 24, 3, 3),
+                    &Location::new_position(/*0,*/ 24, 3, 3),
                     1
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::new_string("hello\nworld"),
-                    &Location::new_position(0, 26, 3, 5),
+                    &Location::new_position(/*0,*/ 26, 3, 5),
                     27
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::RightBracket,
-                    &Location::new_position(0, 53, 6, 3),
+                    &Location::new_position(/*0,*/ 53, 6, 3),
                     1
                 ),
             ]
@@ -4289,16 +4259,16 @@ mod tests {
 
         // err: the content does not start on a new line
         assert!(matches!(
-            lex_str_to_vec(
+            lex_from_str_without_location(
                 r#"
 """hello
 """
 "#
             ),
-            Err(Error::MessageWithLocation(
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 4,
                     line: 1,
                     column: 3,
@@ -4309,62 +4279,66 @@ mod tests {
 
         // err: missing the ending marker (the ending marker does not start on a new line)
         assert!(matches!(
-            lex_str_to_vec(
+            lex_from_str_without_location(
                 r#"
 """
 hello"""
 "#
             ),
-            Err(Error::UnexpectedEndOfDocument(_))
+            Err(AsonError::UnexpectedEndOfDocument(_))
         ));
 
         // err: missing the ending marker
         assert!(matches!(
-            lex_str_to_vec(
+            lex_from_str_without_location(
                 r#"
 """
 hello
 world"#
             ),
-            Err(Error::UnexpectedEndOfDocument(_))
+            Err(AsonError::UnexpectedEndOfDocument(_))
         ));
 
         // err: missing the ending marker, ends with \n
         assert!(matches!(
-            lex_str_to_vec(
+            lex_from_str_without_location(
                 r#"
 """
 hello
 "#
             ),
-            Err(Error::UnexpectedEndOfDocument(_))
+            Err(AsonError::UnexpectedEndOfDocument(_))
         ));
     }
 
     #[test]
     fn test_lex_byte_data_hexadecimal() {
         assert_eq!(
-            lex_str_to_vec(
+            lex_from_str_without_location(
                 r#"
                 h""
                 "#
             )
             .unwrap(),
-            vec![Token::NewLine, Token::ByteData(vec![]), Token::NewLine]
+            vec![Token::NewLine, Token::HexByteData(vec![]), Token::NewLine]
         );
 
         assert_eq!(
-            lex_str_to_vec(
+            lex_from_str_without_location(
                 r#"
                 h"11"
                 "#
             )
             .unwrap(),
-            vec![Token::NewLine, Token::ByteData(vec![0x11]), Token::NewLine,]
+            vec![
+                Token::NewLine,
+                Token::HexByteData(vec![0x11]),
+                Token::NewLine,
+            ]
         );
 
         assert_eq!(
-            lex_str_to_vec(
+            lex_from_str_without_location(
                 r#"
                 h"11 13 17 19"
                 "#
@@ -4372,13 +4346,13 @@ hello
             .unwrap(),
             vec![
                 Token::NewLine,
-                Token::ByteData(vec![0x11, 0x13, 0x17, 0x19]),
+                Token::HexByteData(vec![0x11, 0x13, 0x17, 0x19]),
                 Token::NewLine,
             ]
         );
 
         assert_eq!(
-            lex_str_to_vec(
+            lex_from_str_without_location(
                 "
                 h\"  11\t  13\r17\r\n  19\n  \"
                 "
@@ -4386,7 +4360,7 @@ hello
             .unwrap(),
             vec![
                 Token::NewLine,
-                Token::ByteData(vec![0x11, 0x13, 0x17, 0x19]),
+                Token::HexByteData(vec![0x11, 0x13, 0x17, 0x19]),
                 Token::NewLine,
             ]
         );
@@ -4394,25 +4368,25 @@ hello
         // location
 
         assert_eq!(
-            lex_str_to_vec_with_range("h\"11 13\"").unwrap(),
+            lex_from_str("h\"11 13\"").unwrap(),
             vec![TokenWithRange::from_position_and_length(
-                Token::ByteData(vec![0x11, 0x13]),
-                &Location::new_position(0, 0, 0, 0),
+                Token::HexByteData(vec![0x11, 0x13]),
+                &Location::new_position(/*0,*/ 0, 0, 0),
                 8
             )]
         );
 
         assert_eq!(
-            lex_str_to_vec_with_range("h\"11\" h\"13\"").unwrap(),
+            lex_from_str("h\"11\" h\"13\"").unwrap(),
             vec![
                 TokenWithRange::from_position_and_length(
-                    Token::ByteData(vec![0x11]),
-                    &Location::new_position(0, 0, 0, 0),
+                    Token::HexByteData(vec![0x11]),
+                    &Location::new_position(/*0,*/ 0, 0, 0),
                     5
                 ),
                 TokenWithRange::from_position_and_length(
-                    Token::ByteData(vec![0x13]),
-                    &Location::new_position(0, 6, 0, 6),
+                    Token::HexByteData(vec![0x13]),
+                    &Location::new_position(/*0,*/ 6, 0, 6),
                     5
                 )
             ]
@@ -4420,11 +4394,11 @@ hello
 
         // err: not enough digits
         assert!(matches!(
-            lex_str_to_vec("h\"11 1\""),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("h\"11 1\""),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 6,
                     line: 0,
                     column: 6,
@@ -4435,11 +4409,11 @@ hello
 
         // err: too much digits | no whitespace between two bytes
         assert!(matches!(
-            lex_str_to_vec("h\"11 1317\""),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("h\"11 1317\""),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 7,
                     line: 0,
                     column: 7,
@@ -4450,11 +4424,11 @@ hello
 
         // err: invalid char for byte string
         assert!(matches!(
-            lex_str_to_vec("h\"11 1x\""),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("h\"11 1x\""),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 6,
                     line: 0,
                     column: 6,
@@ -4465,11 +4439,11 @@ hello
 
         // err: invalid separator
         assert!(matches!(
-            lex_str_to_vec("h\"11-13\""),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("h\"11-13\""),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 4,
                     line: 0,
                     column: 4,
@@ -4480,27 +4454,27 @@ hello
 
         // err: missing the close quote
         assert!(matches!(
-            lex_str_to_vec("h\"11 13"),
-            Err(Error::UnexpectedEndOfDocument(_))
+            lex_from_str_without_location("h\"11 13"),
+            Err(AsonError::UnexpectedEndOfDocument(_))
         ));
 
         // err: missing the close quote, ends with \n
         assert!(matches!(
-            lex_str_to_vec("h\"11 13\n"),
-            Err(Error::UnexpectedEndOfDocument(_))
+            lex_from_str_without_location("h\"11 13\n"),
+            Err(AsonError::UnexpectedEndOfDocument(_))
         ));
 
         // err: missing the close quote, ends with whitespaces/other chars
         assert!(matches!(
-            lex_str_to_vec("h\"11 13\n    "),
-            Err(Error::UnexpectedEndOfDocument(_))
+            lex_from_str_without_location("h\"11 13\n    "),
+            Err(AsonError::UnexpectedEndOfDocument(_))
         ));
     }
 
     #[test]
     fn test_lex_line_comment() {
         assert_eq!(
-            lex_str_to_vec(
+            lex_from_str_without_location(
                 r#"
                 7 //11
                 13 17// 19 23
@@ -4529,47 +4503,47 @@ hello
         // location
 
         assert_eq!(
-            lex_str_to_vec_with_range("foo // bar").unwrap(),
+            lex_from_str("foo // bar").unwrap(),
             vec![
                 TokenWithRange::from_position_and_length(
                     Token::Identifier("foo".to_owned()),
-                    &Location::new_position(0, 0, 0, 0),
+                    &Location::new_position(/*0,*/ 0, 0, 0),
                     3
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::Comment(Comment::Line(" bar".to_owned())),
-                    &Location::new_position(0, 4, 0, 4),
+                    &Location::new_position(/*0,*/ 4, 0, 4),
                     6
                 ),
             ]
         );
 
         assert_eq!(
-            lex_str_to_vec_with_range("abc // def\n// xyz\n").unwrap(),
+            lex_from_str("abc // def\n// xyz\n").unwrap(),
             vec![
                 TokenWithRange::from_position_and_length(
                     Token::Identifier("abc".to_owned()),
-                    &Location::new_position(0, 0, 0, 0),
+                    &Location::new_position(/*0,*/ 0, 0, 0),
                     3
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::Comment(Comment::Line(" def".to_owned())),
-                    &Location::new_position(0, 4, 0, 4),
+                    &Location::new_position(/*0,*/ 4, 0, 4),
                     6
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::NewLine,
-                    &Location::new_position(0, 10, 0, 10),
+                    &Location::new_position(/*0,*/ 10, 0, 10),
                     1
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::Comment(Comment::Line(" xyz".to_owned())),
-                    &Location::new_position(0, 11, 1, 0),
+                    &Location::new_position(/*0,*/ 11, 1, 0),
                     6
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::NewLine,
-                    &Location::new_position(0, 17, 1, 6),
+                    &Location::new_position(/*0,*/ 17, 1, 6),
                     1
                 ),
             ]
@@ -4579,7 +4553,7 @@ hello
     #[test]
     fn test_lex_block_comment() {
         assert_eq!(
-            lex_str_to_vec(
+            lex_from_str_without_location(
                 r#"
                 7 /* 11 13 */ 17
                 "#
@@ -4596,7 +4570,7 @@ hello
 
         // nested block comment
         assert_eq!(
-            lex_str_to_vec(
+            lex_from_str_without_location(
                 r#"
                 7 /* 11 /* 13 */ 17 */ 19
                 "#
@@ -4613,7 +4587,7 @@ hello
 
         // line comment chars "//" within the block comment
         assert_eq!(
-            lex_str_to_vec(
+            lex_from_str_without_location(
                 r#"
                 7 /* 11 // 13 17 */ 19
                 "#
@@ -4631,37 +4605,37 @@ hello
         // location
 
         assert_eq!(
-            lex_str_to_vec_with_range("foo /* hello */ bar").unwrap(),
+            lex_from_str("foo /* hello */ bar").unwrap(),
             vec![
                 TokenWithRange::from_position_and_length(
                     Token::Identifier("foo".to_owned()),
-                    &Location::new_position(0, 0, 0, 0),
+                    &Location::new_position(/*0,*/ 0, 0, 0),
                     3
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::Comment(Comment::Block(" hello ".to_owned())),
-                    &Location::new_position(0, 4, 0, 4),
+                    &Location::new_position(/*0,*/ 4, 0, 4),
                     11
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::Identifier("bar".to_owned()),
-                    &Location::new_position(0, 16, 0, 16),
+                    &Location::new_position(/*0,*/ 16, 0, 16),
                     3
                 ),
             ]
         );
 
         assert_eq!(
-            lex_str_to_vec_with_range("/* abc\nxyz */ /* hello */").unwrap(),
+            lex_from_str("/* abc\nxyz */ /* hello */").unwrap(),
             vec![
                 TokenWithRange::from_position_and_length(
                     Token::Comment(Comment::Block(" abc\nxyz ".to_owned())),
-                    &Location::new_position(0, 0, 0, 0),
+                    &Location::new_position(/*0,*/ 0, 0, 0),
                     13
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::Comment(Comment::Block(" hello ".to_owned())),
-                    &Location::new_position(0, 14, 1, 7),
+                    &Location::new_position(/*0,*/ 14, 1, 7),
                     11
                 ),
             ]
@@ -4669,26 +4643,26 @@ hello
 
         // err: incomplete, missing "*/"
         assert!(matches!(
-            lex_str_to_vec("7 /* 11"),
-            Err(Error::UnexpectedEndOfDocument(_))
+            lex_from_str_without_location("7 /* 11"),
+            Err(AsonError::UnexpectedEndOfDocument(_))
         ));
 
         // err: incomplete, missing "*/", ends with \n
         assert!(matches!(
-            lex_str_to_vec("7 /* 11\n"),
-            Err(Error::UnexpectedEndOfDocument(_))
+            lex_from_str_without_location("7 /* 11\n"),
+            Err(AsonError::UnexpectedEndOfDocument(_))
         ));
 
         // err: incomplete, unpaired, missing "*/"
         assert!(matches!(
-            lex_str_to_vec("a /* b /* c */"),
-            Err(Error::UnexpectedEndOfDocument(_))
+            lex_from_str_without_location("a /* b /* c */"),
+            Err(AsonError::UnexpectedEndOfDocument(_))
         ));
 
         // err: incomplete, unpaired, missing "*/", ends with \n
         assert!(matches!(
-            lex_str_to_vec("a /* b /* c */\n"),
-            Err(Error::UnexpectedEndOfDocument(_))
+            lex_from_str_without_location("a /* b /* c */\n"),
+            Err(AsonError::UnexpectedEndOfDocument(_))
         ));
     }
 
@@ -4699,53 +4673,53 @@ hello
         let expect_date3 = DateTime::parse_from_rfc3339("2024-03-16T16:30:50+08:00").unwrap();
 
         assert_eq!(
-            lex_str_to_vec("d\"2024-03-16\"").unwrap(),
+            lex_from_str_without_location("d\"2024-03-16\"").unwrap(),
             vec![Token::Date(expect_date1)]
         );
 
         assert_eq!(
-            lex_str_to_vec("d\"2024-03-16T16:30:50Z\"").unwrap(),
+            lex_from_str_without_location("d\"2024-03-16T16:30:50Z\"").unwrap(),
             vec![Token::Date(expect_date2)]
         );
 
         assert_eq!(
-            lex_str_to_vec("d\"2024-03-16T16:30:50z\"").unwrap(),
+            lex_from_str_without_location("d\"2024-03-16T16:30:50z\"").unwrap(),
             vec![Token::Date(expect_date2)]
         );
 
         assert_eq!(
-            lex_str_to_vec("d\"2024-03-16T16:30:50\"").unwrap(),
+            lex_from_str_without_location("d\"2024-03-16T16:30:50\"").unwrap(),
             vec![Token::Date(expect_date2)]
         );
 
         assert_eq!(
-            lex_str_to_vec("d\"2024-03-16t16:30:50\"").unwrap(),
+            lex_from_str_without_location("d\"2024-03-16t16:30:50\"").unwrap(),
             vec![Token::Date(expect_date2)]
         );
 
         assert_eq!(
-            lex_str_to_vec("d\"2024-03-16 16:30:50\"").unwrap(),
+            lex_from_str_without_location("d\"2024-03-16 16:30:50\"").unwrap(),
             vec![Token::Date(expect_date2)]
         );
 
         assert_eq!(
-            lex_str_to_vec("d\"2024-03-16T16:30:50+08:00\"").unwrap(),
+            lex_from_str_without_location("d\"2024-03-16T16:30:50+08:00\"").unwrap(),
             vec![Token::Date(expect_date3)]
         );
 
         // location
 
         assert_eq!(
-            lex_str_to_vec_with_range("d\"2024-03-16\" d\"2024-03-16T16:30:50+08:00\"").unwrap(),
+            lex_from_str("d\"2024-03-16\" d\"2024-03-16T16:30:50+08:00\"").unwrap(),
             vec![
                 TokenWithRange::from_position_and_length(
                     Token::Date(expect_date1),
-                    &Location::new_position(0, 0, 0, 0),
+                    &Location::new_position(/*0,*/ 0, 0, 0),
                     13
                 ),
                 TokenWithRange::from_position_and_length(
                     Token::Date(expect_date3),
-                    &Location::new_position(0, 14, 0, 14),
+                    &Location::new_position(/*0,*/ 14, 0, 14),
                     28
                 ),
             ]
@@ -4753,11 +4727,11 @@ hello
 
         // err: syntex error, should be YYYY-MM-DD HH:mm:ss
         assert!(matches!(
-            lex_str_to_vec("d\"2024-3-16 4:30:50\""),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("d\"2024-3-16 4:30:50\""),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 0,
                     line: 0,
                     column: 0,
@@ -4768,11 +4742,11 @@ hello
 
         // err: missing date part
         assert!(matches!(
-            lex_str_to_vec("d\"16:30:50\""),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("d\"16:30:50\""),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 0,
                     line: 0,
                     column: 0,
@@ -4783,11 +4757,11 @@ hello
 
         // err: invalid char
         assert!(matches!(
-            lex_str_to_vec("d\"Aug 8, 2024\""),
-            Err(Error::MessageWithLocation(
+            lex_from_str_without_location("d\"Aug 8, 2024\""),
+            Err(AsonError::MessageWithLocation(
                 _,
                 Location {
-                    unit: 0,
+                    // unit: 0,
                     index: 2,
                     line: 0,
                     column: 2,
@@ -4798,20 +4772,20 @@ hello
 
         // err: incomplete date string
         assert!(matches!(
-            lex_str_to_vec("d\"2024-08-08"),
-            Err(Error::UnexpectedEndOfDocument(_))
+            lex_from_str_without_location("d\"2024-08-08"),
+            Err(AsonError::UnexpectedEndOfDocument(_))
         ));
     }
 
     #[test]
     fn test_lex_variant() {
         assert_eq!(
-            lex_str_to_vec("Option::None").unwrap(),
+            lex_from_str_without_location("Option::None").unwrap(),
             vec![Token::new_variant("Option", "None")]
         );
 
         assert_eq!(
-            lex_str_to_vec("Option::Some(123)").unwrap(),
+            lex_from_str_without_location("Option::Some(123)").unwrap(),
             vec![
                 Token::new_variant("Option", "Some"),
                 Token::LeftParen,
@@ -4821,7 +4795,7 @@ hello
         );
 
         assert_eq!(
-            lex_str_to_vec("value: Result::Ok(456)").unwrap(),
+            lex_from_str_without_location("value: Result::Ok(456)").unwrap(),
             vec![
                 Token::new_identifier("value"),
                 Token::Colon,
@@ -4836,7 +4810,7 @@ hello
     #[test]
     fn test_lex_multiple_tokens() {
         assert_eq!(
-            lex_str_to_vec(
+            lex_from_str_without_location(
                 r#"
                 {id: 123, name: "foo"}
                 "#
@@ -4858,7 +4832,7 @@ hello
         );
 
         assert_eq!(
-            lex_str_to_vec(
+            lex_from_str_without_location(
                 r#"
                 [123,456,789,]
                 "#
@@ -4879,7 +4853,7 @@ hello
         );
 
         assert_eq!(
-            lex_str_to_vec(
+            lex_from_str_without_location(
                 r#"
                 (123 "foo" true) // line comment
                 "#
@@ -4898,7 +4872,7 @@ hello
         );
 
         assert_eq!(
-            lex_str_to_vec(
+            lex_from_str_without_location(
                 r#"
                 {
                     a: [1,2,3]

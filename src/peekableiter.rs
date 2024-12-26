@@ -100,7 +100,7 @@ where
     }
 }
 
-impl<'a, T> Iterator for PeekableIter<'a, T>
+impl<T> Iterator for PeekableIter<'_, T>
 where
     T: PartialEq,
 {
