@@ -308,7 +308,7 @@ Planets
         3. Uranus Neptune
 ```
 
-Note that all leading whitespaces are reserved.
+Note that all leading whitespace is preserved.
 
 #### 6.1.3 Auto-Trimmed Strings
 
@@ -503,7 +503,7 @@ In the example above, although the length of each sub-list is different, since t
 
 ### 6.4 Maps
 
-A Map is a list composed of one or more name-value pairs. In appearance, a Map is similar to an Object, but the names of items in a Map are typically strings or numbers (primitive data types), rather than identifiers. Additionally, a Map is a special kind of list, so it is enclosed in square brackets (`[...]`) instead of curly braces (`{...}`).
+A Map is a list composed of one or more key-value pairs. In appearance, a Map is similar to an Object, but the keys of items in a Map are typically strings or numbers (primitive data types), rather than identifiers. Additionally, a Map is a special kind of list, so it is enclosed in square brackets (`[...]`) instead of curly braces (`{...}`).
 
 ```json5
 [
@@ -620,7 +620,7 @@ Color::RGB(255, 127, 63)
 
 ### 6.7 Comments
 
-Like JavaScript and C/C++, ASON also supports two types of comments: line comments and block comments. Comments are for human reading and are completely ignored by the machine.
+Like JavaScript and C/C++, ASON also supports two types of comments: line comments and block comments. Comments are for human readability and are completely ignored by the parser.
 
 Line comments start with the `//` symbol and continue until the end of the line. For example:
 
@@ -921,7 +921,7 @@ It should be noted that in some programming languages, tuples and vectors are no
 
 ### 7.5 Enums
 
-In the above example, the order status is represented by a string. From historical lessons, we know that a batter solution is to use an enum. Rust enum corresponds to ASON `Variant`. The following code uses the enum `Status` to replace the `String` in `Vec<(i32, String)>`.
+In the above example, the order status is represented by a string. From historical lessons, we know that a better solution is to use an enum. Rust enum corresponds to ASON `Variant`. The following code uses the enum `Status` to replace the `String` in `Vec<(i32, String)>`.
 
 ```rust
 #[derive(Serialize, Deserialize)]
